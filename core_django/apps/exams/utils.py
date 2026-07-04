@@ -106,9 +106,13 @@ def import_full_exam_data(exam_json_file, audio_file=None, image_mapping_file=No
                 q_id = q_data.get('question_id')
                 q_desc = q_data.get('image_description', '').strip()
                 q_image_url = q_data.get('image_url', '')
-                if not q_image_url and q_desc in image_mapping_by_desc:
+                # Ưu tiên lấy ảnh mới tải lên nếu khớp mô tả
+                if q_desc in image_mapping_by_desc:
                     q_image_url = image_mapping_by_desc[q_desc]
                             
+                q_audio_raw = q_data.get('audio_url', '')
+                q_audio_clean = '' if (q_audio_raw.startswith('audio/') or 'q_listen_' in q_audio_raw) else q_audio_raw
+
                 question, _ = Question.objects.update_or_create(
                     section=section,
                     question_id=q_id,
@@ -117,7 +121,7 @@ def import_full_exam_data(exam_json_file, audio_file=None, image_mapping_file=No
                         'difficulty': q_data.get('difficulty', 'easy'),
                         'points': q_data.get('points', 5),
                         'tags': q_data.get('tags', []),
-                        'audio_url': q_data.get('audio_url', ''),
+                        'audio_url': q_audio_clean,
                         'audio_start_time': q_data.get('audio_start_time', ''),
                         'audio_end_time': q_data.get('audio_end_time', ''),
                         'audio_script': q_data.get('audio_script', ''),
@@ -135,7 +139,8 @@ def import_full_exam_data(exam_json_file, audio_file=None, image_mapping_file=No
                     o_image_url = o_data.get('image_url', '')
                     
                     o_desc = o_data.get('image_description', '').strip()
-                    if not o_image_url and o_desc in image_mapping_by_desc:
+                    # Ưu tiên lấy ảnh mới tải lên nếu khớp mô tả
+                    if o_desc in image_mapping_by_desc:
                         o_image_url = image_mapping_by_desc[o_desc]
                                 
                     Option.objects.update_or_create(
@@ -150,16 +155,7 @@ def import_full_exam_data(exam_json_file, audio_file=None, image_mapping_file=No
                     )
 
     # Evict cache for this exam and list caches
-    cache.delete(f"exam:data:{exam_id}")
-    if hasattr(cache, 'client'):
-        try:
-            redis_client = cache.client.get_client()
-            keys = redis_client.keys("*exams:list:*")
-            if keys:
-                redis_client.delete(*keys)
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(f"Failed to clear exam list cache: {e}")
+    clear_exam_cache(exam_id)
 
     # Trigger background task to process and upload to GCS on commit
     transaction.on_commit(lambda: process_exam_media_task.delay(exam_id))
@@ -169,3 +165,137 @@ def import_full_exam_data(exam_json_file, audio_file=None, image_mapping_file=No
         'audio_url': audio_url,
         'images_uploaded': len(saved_images)
     }
+
+
+def import_exam_from_zip(zip_file):
+    """
+    Imports an HSK exam directly from an uploaded zip file containing:
+    - test/*.json
+    - audio/*.mp3
+    - img_mapping/*.json
+    - img/*.(png|jpg|jpeg)
+    """
+    import zipfile
+    from django.core.files.base import ContentFile
+
+    if not zip_file:
+        raise ValueError('Missing ZIP file')
+
+    # Mở file ZIP trong bộ nhớ
+    try:
+        zip_ref = zipfile.ZipFile(zip_file)
+    except zipfile.BadZipFile as e:
+        raise ValueError(f'Invalid ZIP file: {e}')
+
+    with zip_ref:
+        namelist = zip_ref.namelist()
+
+        # Xác định xem cấu trúc ZIP có thư mục bọc ngoài không (VD: HSK1_NEW_UUID_001/test/ thay vì test/)
+        # Ta quét tìm vị trí của "test/" để tính toán prefix
+        prefix = ""
+        for path in namelist:
+            if "test/" in path:
+                idx = path.find("test/")
+                prefix = path[:idx]
+                break
+
+        # Khởi tạo đường dẫn các file cần tìm
+        json_path = None
+        audio_path = None
+        mapping_path = None
+        image_paths = []
+
+        for path in namelist:
+            # Loại bỏ prefix để chuẩn hóa
+            norm_path = path[len(prefix):] if path.startswith(prefix) else path
+
+            # Bỏ qua nếu là thư mục
+            if path.endswith('/'):
+                continue
+
+            if norm_path.startswith("test/") and norm_path.endswith(".json"):
+                json_path = path
+            elif norm_path.startswith("audio/") and norm_path.endswith(".mp3"):
+                # Ưu tiên lấy hsk_listening_exam.mp3 làm audio chính
+                if not audio_path or "hsk_listening_exam.mp3" in norm_path:
+                    audio_path = path
+            elif norm_path.startswith("img_mapping/") and norm_path.endswith(".json"):
+                mapping_path = path
+            elif norm_path.startswith("img/") and not path.endswith('.txt'): # Bỏ qua file txt báo lỗi rỗng
+                image_paths.append(path)
+
+        if not json_path:
+            raise ValueError("Không tìm thấy file JSON đề thi trong thư mục 'test/' của file ZIP.")
+
+        # 1. Đọc file JSON đề thi
+        try:
+            json_data = zip_ref.read(json_path)
+            exam_json_file = ContentFile(json_data, name=os.path.basename(json_path))
+        except Exception as e:
+            raise ValueError(f"Không thể đọc file JSON đề thi từ ZIP: {e}")
+
+        # 2. Đọc file Audio (nếu có)
+        audio_file = None
+        if audio_path:
+            try:
+                audio_data = zip_ref.read(audio_path)
+                audio_file = ContentFile(audio_data, name=os.path.basename(audio_path))
+            except Exception as e:
+                raise ValueError(f"Không thể đọc file Audio từ ZIP: {e}")
+
+        # 3. Đọc file Mapping (nếu có)
+        image_mapping_file = None
+        if mapping_path:
+            try:
+                mapping_data = zip_ref.read(mapping_path)
+                image_mapping_file = ContentFile(mapping_data, name=os.path.basename(mapping_path))
+            except Exception as e:
+                raise ValueError(f"Không thể đọc file Image Mapping từ ZIP: {e}")
+
+        # 4. Đọc các file ảnh minh họa
+        images = []
+        for img_path in image_paths:
+            try:
+                img_data = zip_ref.read(img_path)
+                img_file = ContentFile(img_data, name=os.path.basename(img_path))
+                images.append(img_file)
+            except Exception as e:
+                raise ValueError(f"Không thể đọc file ảnh {img_path} từ ZIP: {e}")
+
+    # 5. Gọi hàm import_full_exam_data để lưu database
+    return import_full_exam_data(
+        exam_json_file=exam_json_file,
+        audio_file=audio_file,
+        image_mapping_file=image_mapping_file,
+        images=images
+    )
+
+
+def clear_exam_cache(exam_id):
+    """Xóa cache của đề thi và danh sách đề thi để đồng bộ frontend."""
+    from django.core.cache import cache
+    cache.delete(f"exam:data:{exam_id}")
+    
+    # Lấy real cache backend để tương thích cả django-redis và Django built-in RedisCache
+    real_cache = cache._connections['default'] if hasattr(cache, '_connections') else cache
+    redis_client = None
+    if hasattr(real_cache, 'client'):
+        try:
+            redis_client = real_cache.client.get_client()
+        except Exception:
+            pass
+    elif hasattr(real_cache, '_cache') and hasattr(real_cache._cache, 'get_client'):
+        try:
+            redis_client = real_cache._cache.get_client()
+        except Exception:
+            pass
+
+    if redis_client:
+        try:
+            # Xóa các key cache danh sách đề thi (hỗ trợ cả các pattern của redis)
+            keys = redis_client.keys("*exams:list:*")
+            if keys:
+                redis_client.delete(*keys)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Failed to clear exam list cache: {e}")

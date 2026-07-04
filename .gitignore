@@ -117,3 +117,4 @@ tts_service/cache/
 /core_django/data
 /scripts
 core_django/celerybeat-schedule
+/pdf_service/cache

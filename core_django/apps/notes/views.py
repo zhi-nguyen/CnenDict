@@ -404,10 +404,12 @@ class NotebookExportPDFView(APIView):
             empty_pages = 0
 
         empty_page_grid_size = get_param('empty_page_grid_size', 'auto')
+        stroke_by_stroke = str(get_param('stroke_by_stroke', 'false')).lower() == 'true'
 
         safe_options["extra_rows"] = extra_rows
         safe_options["empty_pages"] = empty_pages
         safe_options["empty_page_grid_size"] = empty_page_grid_size
+        safe_options["stroke_by_stroke"] = stroke_by_stroke
 
         # Phân phối hàng đợi ưu tiên cho paid users
         if tier in ('Plus', 'Premium', 'Pro'):

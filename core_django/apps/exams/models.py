@@ -82,6 +82,7 @@ class Question(models.Model):
         ("fill_blank", "Fill in Blank - Điền từ"),
         ("matching", "Matching - Nối"),
         ("ordering", "Ordering - Sắp xếp"),
+        ("essay", "Essay - Tự luận"),
     ]
 
     DIFFICULTY_CHOICES = [
@@ -142,3 +143,26 @@ class Option(models.Model):
     def __str__(self):
         display = self.text or self.image_description or self.option_id
         return f"{self.option_id}: {display[:50]}"
+
+
+# --- SIGNALS FOR CACHE EVICTION ---
+from django.db.models.signals import post_save, post_delete
+from django.dispatch import receiver
+
+@receiver(post_save, sender=Exam)
+def on_exam_save(sender, instance, **kwargs):
+    """Xóa cache khi lưu đề thi (tạo mới hoặc cập nhật)."""
+    try:
+        from .utils import clear_exam_cache
+        clear_exam_cache(instance.exam_id)
+    except Exception:
+        pass
+
+@receiver(post_delete, sender=Exam)
+def on_exam_delete(sender, instance, **kwargs):
+    """Xóa cache khi đề thi bị xóa (xóa đơn lẻ hoặc xóa hàng loạt)."""
+    try:
+        from .utils import clear_exam_cache
+        clear_exam_cache(instance.exam_id)
+    except Exception:
+        pass
