@@ -5,7 +5,7 @@ from django.conf import settings
 from django.db import transaction
 from django.core.cache import cache
 from django.core.files.storage import default_storage
-from .models import Exam, Section, Question, Option
+from .models import Exam, Section, Paragraph, Question, Option
 from .tasks import process_exam_media_task
 
 def import_full_exam_data(exam_json_file, audio_file=None, image_mapping_file=None, images=None):
@@ -102,7 +102,13 @@ def import_full_exam_data(exam_json_file, audio_file=None, image_mapping_file=No
                 }
             )
             
-            for q_idx, q_data in enumerate(sec_data.get('questions', [])):
+            section.paragraphs.all().delete()
+
+            passages_dict = {}
+            paragraph_counter = 1
+            questions_list = sec_data.get('questions', [])
+
+            for q_idx, q_data in enumerate(questions_list):
                 q_id = q_data.get('question_id')
                 q_desc = q_data.get('image_description', '').strip()
                 q_image_url = q_data.get('image_url', '')
@@ -112,6 +118,34 @@ def import_full_exam_data(exam_json_file, audio_file=None, image_mapping_file=No
                             
                 q_audio_raw = q_data.get('audio_url', '')
                 q_audio_clean = '' if (q_audio_raw.startswith('audio/') or 'q_listen_' in q_audio_raw) else q_audio_raw
+
+                q_passage = q_data.get('paragraph', '').strip()
+                q_prompt = q_data.get('question_text', '').strip()
+
+                paragraph_obj = None
+                if q_passage:
+                    if q_passage not in passages_dict:
+                        p_id = f"para_{section.section_id}_{paragraph_counter}"
+                        lines = [line.strip() for line in q_passage.split('\n') if line.strip()]
+                        title = f"Đoạn văn {paragraph_counter}"
+                        for line in lines:
+                            if len(line) > 5 and not any(k in line for k in ["阅读", "回答问题", "Read", "Passage"]):
+                                title = line[:50]
+                                if len(line) > 50:
+                                    title += "..."
+                                break
+                        
+                        paragraph_obj = Paragraph.objects.create(
+                            section=section,
+                            paragraph_id=p_id,
+                            title=title,
+                            content=q_passage,
+                            ordering=paragraph_counter
+                        )
+                        passages_dict[q_passage] = paragraph_obj
+                        paragraph_counter += 1
+                    else:
+                        paragraph_obj = passages_dict[q_passage]
 
                 question, _ = Question.objects.update_or_create(
                     section=section,
@@ -125,11 +159,12 @@ def import_full_exam_data(exam_json_file, audio_file=None, image_mapping_file=No
                         'audio_start_time': q_data.get('audio_start_time', ''),
                         'audio_end_time': q_data.get('audio_end_time', ''),
                         'audio_script': q_data.get('audio_script', ''),
-                        'question_text': q_data.get('question_text', ''),
+                        'question_text': q_prompt,
                         'image_url': q_image_url,
                         'image_description': q_data.get('image_description', ''),
                         'correct_answer': q_data.get('correct_answer', ''),
                         'explanation': q_data.get('explanation', ''),
+                        'paragraph': paragraph_obj,
                         'ordering': q_idx
                     }
                 )

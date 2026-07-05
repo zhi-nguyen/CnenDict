@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Exam, Section, Question, Option
+from .models import Exam, Section, Paragraph, Question, Option
 
 
 class OptionSerializer(serializers.ModelSerializer):
@@ -8,8 +8,15 @@ class OptionSerializer(serializers.ModelSerializer):
         fields = ['id', 'option_id', 'text', 'image_url', 'image_description', 'ordering']
 
 
+class ParagraphSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Paragraph
+        fields = ['id', 'paragraph_id', 'title', 'content', 'ordering']
+
+
 class QuestionSerializer(serializers.ModelSerializer):
     options = OptionSerializer(many=True, read_only=True)
+    paragraph = ParagraphSerializer(read_only=True)
 
     class Meta:
         model = Question
@@ -17,18 +24,19 @@ class QuestionSerializer(serializers.ModelSerializer):
             'id', 'question_id', 'question_type', 'difficulty', 'points', 'tags',
             'audio_url', 'audio_start_time', 'audio_end_time', 'audio_script',
             'question_text', 'image_url', 'image_description',
-            'correct_answer', 'explanation', 'ordering', 'options'
+            'correct_answer', 'explanation', 'ordering', 'options', 'paragraph'
         ]
 
 
 class SectionSerializer(serializers.ModelSerializer):
     questions = QuestionSerializer(many=True, read_only=True)
+    paragraphs = ParagraphSerializer(many=True, read_only=True)
 
     class Meta:
         model = Section
         fields = [
             'id', 'section_id', 'section_name', 'part_number', 'instruction',
-            'section_audio_url', 'ordering', 'questions'
+            'section_audio_url', 'ordering', 'questions', 'paragraphs'
         ]
 
 
@@ -43,6 +51,7 @@ class ExamSerializer(serializers.ModelSerializer):
             'allow_resume', 'max_attempts', 'shuffle_questions', 'shuffle_options',
             'show_explanation_after', 'status', 'created_at', 'sections'
         ]
+
 
 class ExamListSerializer(serializers.ModelSerializer):
     class Meta:

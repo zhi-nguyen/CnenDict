@@ -118,3 +118,4 @@ tts_service/cache/
 /scripts
 core_django/celerybeat-schedule
 /pdf_service/cache
+/core_django/scratch
