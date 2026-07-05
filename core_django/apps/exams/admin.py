@@ -34,33 +34,49 @@ class ExamAdmin(admin.ModelAdmin):
         from django.contrib import messages
         from django.urls import reverse
         from django.http import HttpResponseRedirect
-        from .utils import import_full_exam_data
+        from .utils import import_full_exam_data, import_exam_from_zip
 
         if request.method == 'POST':
+            exam_zip = request.FILES.get('exam_zip')
             exam_json = request.FILES.get('exam_json')
             audio_file = request.FILES.get('audio_file')
             image_mapping = request.FILES.get('image_mapping')
             images = request.FILES.getlist('images')
 
-            if not exam_json:
-                messages.error(request, "Vui lòng chọn file JSON đề thi.")
-            else:
+            # Nếu người dùng tải lên file ZIP
+            if exam_zip:
                 try:
-                    res = import_full_exam_data(
-                        exam_json_file=exam_json,
-                        audio_file=audio_file,
-                        image_mapping_file=image_mapping,
-                        images=images
-                    )
+                    res = import_exam_from_zip(exam_zip)
                     messages.success(
                         request, 
-                        f"Tải lên đề thi thành công! Exam ID: {res['exam_id']}, Images: {res['images_uploaded']}"
+                        f"Tải lên đề thi từ file ZIP thành công! Exam ID: {res['exam_id']}, Images: {res['images_uploaded']}"
                     )
                     return HttpResponseRedirect(reverse('admin:exams_exam_changelist'))
                 except ValueError as e:
-                    messages.error(request, f"Lỗi dữ liệu: {e}")
+                    messages.error(request, f"Lỗi dữ liệu file ZIP: {e}")
                 except Exception as e:
-                    messages.error(request, f"Lỗi hệ thống: {e}")
+                    messages.error(request, f"Lỗi hệ thống khi đọc file ZIP: {e}")
+            # Nếu tải lên thủ công từng file
+            else:
+                if not exam_json:
+                    messages.error(request, "Vui lòng tải lên file ZIP hoặc chọn file JSON đề thi lẻ.")
+                else:
+                    try:
+                        res = import_full_exam_data(
+                            exam_json_file=exam_json,
+                            audio_file=audio_file,
+                            image_mapping_file=image_mapping,
+                            images=images
+                        )
+                        messages.success(
+                            request, 
+                            f"Tải lên đề thi thành công! Exam ID: {res['exam_id']}, Images: {res['images_uploaded']}"
+                        )
+                        return HttpResponseRedirect(reverse('admin:exams_exam_changelist'))
+                    except ValueError as e:
+                        messages.error(request, f"Lỗi dữ liệu: {e}")
+                    except Exception as e:
+                        messages.error(request, f"Lỗi hệ thống: {e}")
 
         context = self.admin_site.each_context(request)
         context.update({

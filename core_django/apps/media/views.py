@@ -3,7 +3,6 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.core.cache import cache
-from .models import ZhEnMapping
 from .tasks import get_word_by_id, generate_word_image_task, trigger_image_regeneration_task
 
 logger = logging.getLogger(__name__)
@@ -30,15 +29,6 @@ class GetWordImageView(APIView):
             cache.set(redis_key, data, timeout=None)  # Infinite cache
             return Response(data)
 
-        # 2.5 Cross-Language Bridge — Mượn ảnh từ ngôn ngữ anh em qua ZhEnMapping
-        bridged_url = self._try_cross_language_bridge(word, word_id, lang)
-        if bridged_url:
-            word.image_url = bridged_url
-            word.save(update_fields=['image_url'])
-            data = {"status": "ready", "image_url": bridged_url}
-            cache.set(redis_key, data, timeout=None)
-            return Response(data)
-
         # 3. Cache Miss & DB Miss -> Trigger Celery Task
         # Check if already generating (Redis lock flag)
         lock_key = f"generating:img:{lang}:{word_id}"
@@ -59,45 +49,15 @@ class GetWordImageView(APIView):
         cache.set(redis_key, {"status": "GENERATING"}, timeout=300)
 
         # Trigger Celery Task in the correct queue
+        user_tier = getattr(request.user.subscription, 'tier', 'Free') if request.user.is_authenticated and hasattr(request.user, 'subscription') else 'Free'
         generate_word_image_task.apply_async(
             args=[str(word_id), lang, user_id],
-            queue='queue_core'
+            kwargs={'user_tier': user_tier}
         )
         
         return Response({"status": "GENERATING"}, status=202)
 
-    @staticmethod
-    def _try_cross_language_bridge(word, word_id, lang):
-        """
-        Tìm kiếm ảnh từ ngôn ngữ đối xứng qua bảng ZhEnMapping.
-        
-        Nếu lang='en' và EnWord chưa có ảnh → tìm ZhWord tương ứng có ảnh.
-        Nếu lang='zh' và ZhWord chưa có ảnh → tìm EnWord tương ứng có ảnh.
-        
-        Returns: image_url (str) hoặc None
-        """
-        try:
-            if lang == 'en':
-                mapping = (
-                    ZhEnMapping.objects
-                    .filter(en_word_id=word_id)
-                    .select_related('zh_word')
-                    .first()
-                )
-                if mapping and mapping.zh_word and mapping.zh_word.image_url:
-                    return mapping.zh_word.image_url
-            elif lang == 'zh':
-                mapping = (
-                    ZhEnMapping.objects
-                    .filter(zh_word_id=word_id)
-                    .select_related('en_word')
-                    .first()
-                )
-                if mapping and mapping.en_word and mapping.en_word.image_url:
-                    return mapping.en_word.image_url
-        except Exception as e:
-            logger.warning(f"Cross-language bridge lookup failed: {e}")
-        return None
+
 
 
 class ReportInvalidImageView(APIView):
@@ -120,9 +80,10 @@ class ReportInvalidImageView(APIView):
 
         # Đẩy tác vụ xử lý bất đồng bộ vào Celery để xóa file cũ và gọi API tái tạo ảnh mới
         user_id = str(request.user.id)
+        user_tier = getattr(request.user.subscription, 'tier', 'Free') if hasattr(request.user, 'subscription') else 'Free'
         trigger_image_regeneration_task.apply_async(
             args=[str(word_id), lang, user_id],
-            queue='queue_core'
+            kwargs={'user_tier': user_tier}
         )
         
         return Response({"detail": "Hình ảnh đang được hệ thống xử lý tái tạo bất đồng bộ."}, status=202)

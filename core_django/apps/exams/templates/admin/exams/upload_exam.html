@@ -18,11 +18,19 @@
             <fieldset class="module aligned">
                 <h2>Tải lên toàn bộ đề thi (JSON, Audio, Hình ảnh)</h2>
                 
+                <div class="form-row" style="background-color: #fdf5e6; border-left: 4px solid #f0a020;">
+                    <div>
+                        <label for="exam_zip"><b>Tải file ZIP Đề thi:</b></label>
+                        <input type="file" name="exam_zip" id="exam_zip" accept=".zip">
+                        <div class="help"><b>Nhanh nhất:</b> Tải lên file <code>.zip</code> chứa cả 4 thư mục con (test, audio, img, img_mapping). Nếu chọn file này, các tùy chọn bên dưới sẽ bị bỏ qua.</div>
+                    </div>
+                </div>
+
                 <div class="form-row">
                     <div>
-                        <label class="required" for="exam_json">JSON Đề thi (test.json):</label>
-                        <input type="file" name="exam_json" id="exam_json" required accept=".json">
-                        <div class="help">Chọn file JSON chứa thông tin câu hỏi và cài đặt đề thi.</div>
+                        <label for="exam_json">Hoặc tải JSON lẻ (test.json):</label>
+                        <input type="file" name="exam_json" id="exam_json" accept=".json">
+                        <div class="help">Chọn file JSON chứa thông tin câu hỏi và cài đặt đề thi nếu tải thủ công.</div>
                     </div>
                 </div>
 

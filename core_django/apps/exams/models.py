@@ -72,6 +72,26 @@ class Section(models.Model):
         return f"{self.exam.level} | {self.section_name} Part {self.part_number}"
 
 
+class Paragraph(models.Model):
+    """
+    Đoạn văn đọc hiểu dài dùng chung cho nhiều câu hỏi.
+    Được tạo trực tiếp từ trường 'paragraph' trong JSON câu hỏi mới.
+    """
+    section = models.ForeignKey(Section, on_delete=models.CASCADE, related_name="paragraphs")
+    paragraph_id = models.CharField(max_length=100)
+    title = models.CharField(max_length=200, blank=True, default="")
+    content = models.TextField(help_text="Nội dung đoạn văn dài")
+    ordering = models.IntegerField(default=0)
+
+    class Meta:
+        db_table = "exams_paragraph"
+        ordering = ["section", "ordering"]
+        unique_together = [["section", "paragraph_id"]]
+
+    def __str__(self):
+        return f"{self.paragraph_id}: {self.title or self.content[:50]}"
+
+
 class Question(models.Model):
     """
     Câu hỏi - tương ứng questions[] trong JSON.
@@ -82,6 +102,7 @@ class Question(models.Model):
         ("fill_blank", "Fill in Blank - Điền từ"),
         ("matching", "Matching - Nối"),
         ("ordering", "Ordering - Sắp xếp"),
+        ("essay", "Essay - Tự luận"),
     ]
 
     DIFFICULTY_CHOICES = [
@@ -91,6 +112,14 @@ class Question(models.Model):
     ]
 
     section = models.ForeignKey(Section, on_delete=models.CASCADE, related_name="questions")
+    paragraph = models.ForeignKey(
+        'Paragraph',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="questions",
+        help_text="Đoạn văn đọc hiểu của câu hỏi này"
+    )
     question_id = models.CharField(max_length=100, help_text="VD: q_listen_001")
     question_type = models.CharField(max_length=30, choices=QUESTION_TYPE_CHOICES)
     difficulty = models.CharField(max_length=20, choices=DIFFICULTY_CHOICES, default="easy")
@@ -142,3 +171,26 @@ class Option(models.Model):
     def __str__(self):
         display = self.text or self.image_description or self.option_id
         return f"{self.option_id}: {display[:50]}"
+
+
+# --- SIGNALS FOR CACHE EVICTION ---
+from django.db.models.signals import post_save, post_delete
+from django.dispatch import receiver
+
+@receiver(post_save, sender=Exam)
+def on_exam_save(sender, instance, **kwargs):
+    """Xóa cache khi lưu đề thi (tạo mới hoặc cập nhật)."""
+    try:
+        from .utils import clear_exam_cache
+        clear_exam_cache(instance.exam_id)
+    except Exception:
+        pass
+
+@receiver(post_delete, sender=Exam)
+def on_exam_delete(sender, instance, **kwargs):
+    """Xóa cache khi đề thi bị xóa (xóa đơn lẻ hoặc xóa hàng loạt)."""
+    try:
+        from .utils import clear_exam_cache
+        clear_exam_cache(instance.exam_id)
+    except Exception:
+        pass

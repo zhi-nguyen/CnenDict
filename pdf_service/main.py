@@ -130,6 +130,109 @@ ACTIVE_FONT = register_chinese_font()
 register_vietnamese_fonts()
 
 # ─────────────────────────────────────────────────────────────
+#  STROKE DECONSTRUCTION & CACHING
+# ─────────────────────────────────────────────────────────────
+import json
+import httpx
+from svg.path import parse_path
+from svg.path.path import Move, Line, QuadraticBezier, CubicBezier, Close
+
+CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
+os.makedirs(CACHE_DIR, exist_ok=True)
+
+# CJK range check for Chinese characters
+CJK_RE = re.compile(r'^[\u4e00-\u9fa5]$')
+
+def get_char_stroke_data(char: str) -> Optional[dict]:
+    if not CJK_RE.match(char):
+        return None
+        
+    filename = f"{ord(char)}.json"
+    cache_path = os.path.join(CACHE_DIR, filename)
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Error reading cache for char '{char}': {e}")
+            
+    # Fetch from CDN jsDelivr using httpx defensively
+    url = f"https://cdn.jsdelivr.net/npm/hanzi-writer-data@2.0/{char}.json"
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            logger.info(f"Fetching stroke data for '{char}' from CDN...")
+            response = client.get(url)
+            if response.status_code == 200:
+                data = response.json()
+                try:
+                    with open(cache_path, 'w', encoding='utf-8') as f:
+                        json.dump(data, f, ensure_ascii=False)
+                except Exception as e:
+                    logger.error(f"Failed to cache stroke data for '{char}': {e}")
+                return data
+            elif response.status_code == 404:
+                logger.warning(f"Character '{char}' not found on CDN (404)")
+            else:
+                logger.warning(f"Failed to fetch '{char}' from CDN: HTTP {response.status_code}")
+    except httpx.RequestError as e:
+        logger.error(f"Network error fetching stroke data for '{char}': {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error fetching stroke data for '{char}': {e}")
+        
+    return None
+
+def draw_svg_path_on_canvas(canvas, path_str: str, x_offset: float, y_offset: float, scale: float):
+    try:
+        path_obj = parse_path(path_str)
+    except Exception as e:
+        logger.error(f"Failed to parse SVG path: {e}")
+        return
+        
+    path = canvas.beginPath()
+    
+    for segment in path_obj:
+        if isinstance(segment, Move):
+            x = x_offset + segment.end.real * scale
+            y = y_offset + (segment.end.imag + 124) * scale
+            path.moveTo(x, y)
+        elif isinstance(segment, Line):
+            x = x_offset + segment.end.real * scale
+            y = y_offset + (segment.end.imag + 124) * scale
+            path.lineTo(x, y)
+        elif isinstance(segment, QuadraticBezier):
+            x0, y0 = segment.start.real, segment.start.imag
+            x1, y1 = segment.control.real, segment.control.imag
+            x2, y2 = segment.end.real, segment.end.imag
+            
+            cx1 = x0 + (2.0 / 3.0) * (x1 - x0)
+            cy1 = y0 + (2.0 / 3.0) * (y1 - y0)
+            cx2 = x2 + (2.0 / 3.0) * (x1 - x2)
+            cy2 = y2 + (2.0 / 3.0) * (y1 - y2)
+            
+            canvas_cx1 = x_offset + cx1 * scale
+            canvas_cy1 = y_offset + (cy1 + 124) * scale
+            canvas_cx2 = x_offset + cx2 * scale
+            canvas_cy2 = y_offset + (cy2 + 124) * scale
+            canvas_x2 = x_offset + x2 * scale
+            canvas_y2 = y_offset + (y2 + 124) * scale
+            
+            path.curveTo(canvas_cx1, canvas_cy1, canvas_cx2, canvas_cy2, canvas_x2, canvas_y2)
+        elif isinstance(segment, CubicBezier):
+            canvas_cx1 = x_offset + segment.control1.real * scale
+            canvas_cy1 = y_offset + (segment.control1.imag + 124) * scale
+            canvas_cx2 = x_offset + segment.control2.real * scale
+            canvas_cy2 = y_offset + (segment.control2.imag + 124) * scale
+            canvas_x = x_offset + segment.end.real * scale
+            canvas_y = y_offset + (segment.end.imag + 124) * scale
+            
+            path.curveTo(canvas_cx1, canvas_cy1, canvas_cx2, canvas_cy2, canvas_x, canvas_y)
+        elif isinstance(segment, Close):
+            path.close()
+            
+    canvas.drawPath(path, fill=True, stroke=False)
+
+
+# ─────────────────────────────────────────────────────────────
 #  PINYIN SYLLABLE SPLITTER (Regex aligner)
 # ─────────────────────────────────────────────────────────────
 SYLLABLE_RE = re.compile(
@@ -178,7 +281,9 @@ def align_pinyin(chars: List[str], pinyin_str: str) -> List[str]:
     return [clean_pinyin_token(s) for s in result]
 
 
-def estimate_block_height(length: int, extra_rows: int, show_pinyin: bool, show_meaning: bool, show_notes: bool, has_meaning: bool, has_note: bool) -> float:
+def estimate_block_height(length: int, extra_rows: int, show_pinyin: bool, show_meaning: bool, show_notes: bool, 
+                          has_meaning: bool, has_note: bool, stroke_by_stroke: bool = False, 
+                          decomposed_strokes: List[int] = []) -> float:
     # Header height in points (approximate)
     header_pt = 32
     if show_pinyin:
@@ -192,31 +297,43 @@ def estimate_block_height(length: int, extra_rows: int, show_pinyin: bool, show_
     if show_notes and has_note:
         note_h = 25
         
-    # Grids height
-    if length <= 3:
-        grid_size = 2.0 * cm
-        if extra_rows == 0:
-            trace_h = grid_size + (6.0 * mm if show_pinyin else 0)
-            empty_h = grid_size
-            grids_h = trace_h + 2 * empty_h + 2 * 0.1 * cm
-        else:
-            trace_h = grid_size + (6.0 * mm if show_pinyin else 0)
-            empty_h = grid_size
-            grids_h = extra_rows * (trace_h + empty_h) + (2 * extra_rows - 1) * 0.1 * cm
-    else:
+    if stroke_by_stroke:
         grid_size = (16.0 / 14.0) * cm
-        ROW_COLS = 14
-        num_chunks = (length + ROW_COLS - 1) // ROW_COLS
-        if extra_rows == 0:
-            trace_h = grid_size + (6.0 * mm if show_pinyin else 0)
-            empty_h = grid_size
-            chunk_h = trace_h + 2 * empty_h + 2 * 0.1 * cm
-        else:
-            trace_h = grid_size + (6.0 * mm if show_pinyin else 0)
-            empty_h = grid_size
-            chunk_h = extra_rows * (trace_h + empty_h) + (2 * extra_rows - 1) * 0.1 * cm
+        decon_h = 0.0
+        for s in decomposed_strokes:
+            # Stroke label height (approx 14 points = 0.5 * cm)
+            decon_h += 0.5 * cm + 0.15 * cm
+            # Grid rows count: 2 rows if S <= 14, 3 rows if S > 14
+            steps = min(s, 27)
+            rows = 3 if steps > 14 else 2
+            decon_h += rows * grid_size + (rows - 1) * 0.1 * cm
+            decon_h += 0.3 * cm
             
-        grids_h = num_chunks * chunk_h + (num_chunks - 1) * 0.3 * cm
+        # Complete sentence rows height
+        sent_label_h = 0.5 * cm + 0.15 * cm
+        cols = 14
+        num_chunks = (length + cols - 1) // cols
+        if extra_rows == 0:
+            sent_rows_h = num_chunks * (3 * grid_size + 2 * 0.1 * cm) + (num_chunks - 1) * 0.3 * cm
+        else:
+            sent_rows_h = num_chunks * (extra_rows * 2 * grid_size + (2 * extra_rows - 1) * 0.1 * cm) + (num_chunks - 1) * 0.3 * cm
+            
+        grids_h = decon_h + sent_label_h + sent_rows_h
+    else:
+        if length <= 3:
+            grid_size = 2.0 * cm
+            if extra_rows == 0:
+                grids_h = 3 * grid_size + 2 * 0.1 * cm
+            else:
+                grids_h = extra_rows * (2 * grid_size) + (2 * extra_rows - 1) * 0.1 * cm
+        else:
+            grid_size = (16.0 / 14.0) * cm
+            cols = 14
+            num_chunks = (length + cols - 1) // cols
+            if extra_rows == 0:
+                grids_h = num_chunks * (3 * grid_size + 2 * 0.1 * cm) + (num_chunks - 1) * 0.3 * cm
+            else:
+                grids_h = num_chunks * (extra_rows * (2 * grid_size) + (2 * extra_rows - 1) * 0.1 * cm) + (num_chunks - 1) * 0.3 * cm
         
     total_h = header_h + 0.15 * cm + grids_h
     if note_h > 0:
@@ -228,7 +345,10 @@ def estimate_block_height(length: int, extra_rows: int, show_pinyin: bool, show_
 #  CUSTOM REPORTLAB ELEMENTS
 # ─────────────────────────────────────────────────────────────
 class TianzigeFlowable(Flowable):
-    def __init__(self, chars: List[str], pinyins: List[str], grid_size: float, is_trace: bool = True, grid_color: str = '#D32F2F', font_name: str = FONT_NAME, show_pinyin: bool = True):
+    def __init__(self, chars: List[str], pinyins: List[str], grid_size: float, is_trace: bool = True, 
+                 grid_color: str = '#D32F2F', font_name: str = FONT_NAME, 
+                 stroke_data: Optional[List[str]] = None, stroke_steps: Optional[List[Optional[int]]] = None,
+                 show_pinyin: bool = False):
         Flowable.__init__(self)
         self.chars = chars
         self.pinyins = pinyins
@@ -236,13 +356,12 @@ class TianzigeFlowable(Flowable):
         self.is_trace = is_trace
         self.grid_color = colors.HexColor(grid_color)
         self.font_name = font_name
-        self.show_pinyin = show_pinyin
+        self.stroke_data = stroke_data
+        self.stroke_steps = stroke_steps
         
         self.num_grids = len(chars)
         self.width = self.num_grids * self.grid_size
         self.height = self.grid_size
-        if self.show_pinyin:
-            self.height += 6 * mm # 6mm margin for Pinyin
             
     def wrap(self, availWidth, availHeight):
         return self.width, self.height
@@ -254,29 +373,13 @@ class TianzigeFlowable(Flowable):
             x = i * self.grid_size
             y = 0
             
-            # 1. Pinyin text above the grid
-            if self.show_pinyin and i < len(self.pinyins) and self.pinyins[i]:
-                pinyin_text = self.pinyins[i]
-                self.canv.saveState()
-                # Scale font size based on grid size
-                p_font_size = 11
-                self.canv.setFont(VN_FONT, p_font_size)
-                self.canv.setFillColor(colors.HexColor('#2E7D32')) # Professional green color for pinyin
-                
-                # Center text
-                p_width = self.canv.stringWidth(pinyin_text, VN_FONT, p_font_size)
-                px = x + (self.grid_size - p_width) / 2
-                py = grid_h + 1.5 * mm
-                self.canv.drawString(px, py, pinyin_text)
-                self.canv.restoreState()
-            
-            # 2. Outer Square Border
+            # 1. Outer Square Border
             self.canv.saveState()
             self.canv.setStrokeColor(self.grid_color)
             self.canv.setLineWidth(0.8)
             self.canv.rect(x, y, self.grid_size, grid_h, stroke=1, fill=0)
             
-            # 3. Inner Dashed Cross Lines (+)
+            # 2. Inner Dashed Cross Lines (+)
             light_color = colors.HexColor(self._get_light_color(self.grid_color.hexval()))
             self.canv.setStrokeColor(light_color)
             self.canv.setLineWidth(0.4)
@@ -285,8 +388,24 @@ class TianzigeFlowable(Flowable):
             self.canv.line(x + self.grid_size / 2, y, x + self.grid_size / 2, y + grid_h)
             self.canv.restoreState()
             
-            # 4. Faint Gray Character for Tracing
-            if self.is_trace and i < len(self.chars) and self.chars[i] and self.chars[i].strip():
+            # 3. Stroke rendering or Faint Gray Character for Tracing
+            if self.stroke_data and self.stroke_steps and i < len(self.stroke_steps) and self.stroke_steps[i] is not None:
+                step = self.stroke_steps[i]
+                if step > 0:
+                    scale = self.grid_size / 1024.0
+                    
+                    # If this is step 27 and total strokes >= 28, draw all strokes
+                    draw_up_to = step
+                    if step == 27 and len(self.stroke_data) >= 28:
+                        draw_up_to = len(self.stroke_data)
+                        
+                    # Draw strokes in light gray
+                    self.canv.saveState()
+                    self.canv.setFillColor(colors.HexColor('#D3D3D3'))
+                    for stroke_idx in range(min(draw_up_to, len(self.stroke_data))):
+                        draw_svg_path_on_canvas(self.canv, self.stroke_data[stroke_idx], x, y, scale)
+                    self.canv.restoreState()
+            elif self.is_trace and i < len(self.chars) and self.chars[i] and self.chars[i].strip():
                 char = self.chars[i]
                 self.canv.saveState()
                 char_font_size = self.grid_size * 0.93
@@ -388,6 +507,7 @@ class OptionsModel(BaseModel):
     extra_rows: Optional[int] = 0
     empty_pages: Optional[int] = 0
     empty_page_grid_size: Optional[str] = "auto"
+    stroke_by_stroke: Optional[bool] = False
 
 class GenerateRequest(BaseModel):
     title: str
@@ -402,6 +522,35 @@ def generate_pdf(req: GenerateRequest):
     if not req.words:
         raise HTTPException(status_code=400, detail="Không có từ vựng nào để xuất PDF")
         
+    if req.options.stroke_by_stroke:
+        for word in req.words:
+            raw_vocab = word.vocabulary.strip()
+            # Filter vocabulary to only Chinese characters
+            hanzi_list = [c for c in raw_vocab if '\u4e00' <= c <= '\u9fff']
+            if not hanzi_list:
+                hanzi_list = list(raw_vocab)
+                
+            length = len(hanzi_list)
+            if length > 14:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Hệ thống phát hiện câu vượt quá 14 chữ Hán: {raw_vocab}."
+                )
+                
+            for char in hanzi_list:
+                stroke_data = get_char_stroke_data(char)
+                if not stroke_data or 'strokes' not in stroke_data:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Hệ thống phát hiện từ không đúng định dạng hoặc không hỗ trợ phân rã nét: {char}."
+                    )
+                S = len(stroke_data['strokes'])
+                if S > 27:
+                    raise HTTPException(
+                        status_code=400, 
+                        detail=f"Hệ thống phát hiện từ không đúng định dạng: {char} ({S} nét) vượt quá giới hạn 27 nét."
+                    )
+                        
     try:
         buffer = BytesIO()
         
@@ -474,6 +623,15 @@ def generate_pdf(req: GenerateRequest):
             leading=20,
             textColor=colors.HexColor('#666666')
         ))
+        styles.add(ParagraphStyle(
+            name='StrokeLabel',
+            fontName=VN_FONT_BOLD,
+            fontSize=11,
+            leading=14,
+            textColor=colors.HexColor('#2E7D32'),
+            spaceBefore=6,
+            spaceAfter=4
+        ))
         
         story = []
         
@@ -514,11 +672,8 @@ def generate_pdf(req: GenerateRequest):
             length = len(hanzi_list)
             
             # Custom formatting:
-            # - Number and Hanzi: size 25pt, on Line 1
-            # - Pinyin: size 20pt in brackets [], on Line 2
-            # - Meaning: size 15pt, italic, in parentheses (), on Line 3
             header_text = f"<font face=\"{VN_FONT_BOLD}\" size=\"25\">{index + 1}.</font> &nbsp;<font face=\"{ACTIVE_FONT}\" size=\"25\">{raw_vocab}</font>"
-            if word.pinyin:
+            if req.options.show_pinyin and word.pinyin:
                 header_text += f"<br/><font face=\"{VN_FONT}\" size=\"16\">[{word.pinyin}]</font>"
             if req.options.show_meaning and word.meaning:
                 header_text += f"<br/><font face=\"{VN_FONT_ITALIC}\" size=\"15\">({word.meaning})</font>"
@@ -526,15 +681,67 @@ def generate_pdf(req: GenerateRequest):
             header_flowable = Paragraph(header_text, styles['WordInfo'])
             header_spacer = Spacer(1, 0.15*cm)
             
-            # Setup columns and grid size based on length
-            if length <= 3:
-                grid_size = 2.0 * cm
-                cols = 8
-                chunks_chars = [hanzi_list + [' '] * (cols - length)]
-                chunks_pinyins = [pinyin_list + [''] * (cols - length)]
-            else:
-                grid_size = (16.0 / 14.0) * cm
+            # Find unique hanzi for duplicate check
+            unique_hanzi = []
+            for c in hanzi_list:
+                if '\u4e00' <= c <= '\u9fff' and c not in unique_hanzi:
+                    unique_hanzi.append(c)
+                    
+            if req.options.stroke_by_stroke:
                 cols = 14
+                grid_size = (16.0 / 14.0) * cm
+                
+                stroke_elements = []
+                decomposed_strokes = []
+                
+                # 1. Build stroke deconstruction elements
+                for char in unique_hanzi:
+                    stroke_data = get_char_stroke_data(char)
+                    if stroke_data and 'strokes' in stroke_data:
+                        S = len(stroke_data['strokes'])
+                        if S >= 1:
+                            decomposed_strokes.append(S)
+                            char_elements = []
+                            char_elements.append(Paragraph(f"Nét chữ \"<font face=\"{ACTIVE_FONT}\">{char}</font>\":", styles['StrokeLabel']))
+                            
+                            M = min(S, 27)
+                            # Row 1
+                            row1_steps = [k for k in range(1, min(M, 14) + 1)]
+                            row1_steps += [None] * (14 - len(row1_steps))
+                            r1 = TianzigeFlowable([' '] * 14, [''] * 14, grid_size, is_trace=False, 
+                                                 grid_color=req.options.grid_color, font_name=ACTIVE_FONT,
+                                                 stroke_data=stroke_data['strokes'], stroke_steps=row1_steps)
+                            r1.hAlign = 'CENTER'
+                            char_elements.append(r1)
+                            char_elements.append(Spacer(1, 0.1 * cm))
+                            
+                            # Row 2
+                            if M > 14:
+                                row2_steps = [k for k in range(15, M + 1)]
+                                row2_steps += [None] * (14 - len(row2_steps))
+                            else:
+                                row2_steps = [None] * 14
+                                
+                            r2 = TianzigeFlowable([' '] * 14, [''] * 14, grid_size, is_trace=False,
+                                                 grid_color=req.options.grid_color, font_name=ACTIVE_FONT,
+                                                 stroke_data=stroke_data['strokes'], stroke_steps=row2_steps)
+                            r2.hAlign = 'CENTER'
+                            char_elements.append(r2)
+                            char_elements.append(Spacer(1, 0.1 * cm))
+                            
+                            # Row 3 (empty row)
+                            r3 = TianzigeFlowable([' '] * 14, [''] * 14, grid_size, is_trace=False,
+                                                 grid_color=req.options.grid_color, font_name=ACTIVE_FONT)
+                            r3.hAlign = 'CENTER'
+                            char_elements.append(r3)
+                            
+                            stroke_elements.append((char, char_elements))
+                            
+                # 2. Build complete sentence elements
+                sentence_elements = []
+                sentence_elements.append(Paragraph("Viết câu hoàn chỉnh:", styles['StrokeLabel']))
+                
+                # Split sentence characters into chunks of 14 columns
                 chunks_chars = []
                 chunks_pinyins = []
                 for offset in range(0, length, cols):
@@ -542,33 +749,165 @@ def generate_pdf(req: GenerateRequest):
                     chunk_p = pinyin_list[offset:offset+cols]
                     chunks_chars.append(chunk_c + [' '] * (cols - len(chunk_c)))
                     chunks_pinyins.append(chunk_p + [''] * (cols - len(chunk_p)))
-            
-            # Estimate block height
-            has_meaning = bool(word.meaning)
-            has_note = bool(word.note)
-            total_height = estimate_block_height(
-                length, 
-                req.options.extra_rows, 
-                req.options.show_pinyin, 
-                req.options.show_meaning, 
-                req.options.show_notes, 
-                has_meaning, 
-                has_note
-            )
-            
-            if total_height <= 23.5 * cm:
-                # Keep the whole block together on a single page
-                all_elements = []
-                all_elements.append(header_flowable)
-                all_elements.append(header_spacer)
-                
-                # Add grids for each chunk
+                    
                 for chunk_idx in range(len(chunks_chars)):
                     if chunk_idx > 0:
-                        all_elements.append(Spacer(1, 0.3 * cm))
-                    
+                        sentence_elements.append(Spacer(1, 0.3 * cm))
+                        
                     chunk_c = chunks_chars[chunk_idx]
                     chunk_p = chunks_pinyins[chunk_idx]
+                    
+                    if req.options.extra_rows == 0:
+                        cr1 = TianzigeFlowable(chunk_c, chunk_p, grid_size, is_trace=True, grid_color=req.options.grid_color, font_name=ACTIVE_FONT)
+                        cr1.hAlign = 'CENTER'
+                        cr2 = TianzigeFlowable([' '] * cols, [''] * cols, grid_size, is_trace=False, grid_color=req.options.grid_color, font_name=ACTIVE_FONT)
+                        cr2.hAlign = 'CENTER'
+                        cr3 = TianzigeFlowable([' '] * cols, [''] * cols, grid_size, is_trace=False, grid_color=req.options.grid_color, font_name=ACTIVE_FONT)
+                        cr3.hAlign = 'CENTER'
+                        
+                        sentence_elements.extend([cr1, Spacer(1, 0.1 * cm), cr2, Spacer(1, 0.1 * cm), cr3])
+                    else:
+                        for pair_idx in range(req.options.extra_rows):
+                            cr_trace = TianzigeFlowable(chunk_c, chunk_p, grid_size, is_trace=True, grid_color=req.options.grid_color, font_name=ACTIVE_FONT)
+                            cr_trace.hAlign = 'CENTER'
+                            cr_empty = TianzigeFlowable([' '] * cols, [''] * cols, grid_size, is_trace=False, grid_color=req.options.grid_color, font_name=ACTIVE_FONT)
+                            cr_empty.hAlign = 'CENTER'
+                            
+                            sentence_elements.extend([cr_trace, Spacer(1, 0.1 * cm), cr_empty])
+                            if pair_idx < req.options.extra_rows - 1:
+                                sentence_elements.append(Spacer(1, 0.1 * cm))
+                                
+                # Estimate block height
+                has_meaning = bool(word.meaning)
+                has_note = bool(word.note)
+                total_height = estimate_block_height(
+                    length, 
+                    req.options.extra_rows, 
+                    req.options.show_pinyin, 
+                    req.options.show_meaning, 
+                    req.options.show_notes, 
+                    has_meaning, 
+                    has_note,
+                    stroke_by_stroke=True,
+                    decomposed_strokes=decomposed_strokes
+                )
+                
+                if total_height <= 23.5 * cm:
+                    all_elements = []
+                    all_elements.append(header_flowable)
+                    all_elements.append(header_spacer)
+                    for char, char_el in stroke_elements:
+                        all_elements.extend(char_el)
+                        all_elements.append(Spacer(1, 0.3 * cm))
+                    all_elements.extend(sentence_elements)
+                    
+                    if req.options.show_notes and word.note:
+                        all_elements.append(Spacer(1, 0.15 * cm))
+                        all_elements.append(Paragraph(f"({word.note})", styles['WordNote']))
+                        
+                    all_elements.append(Spacer(1, 0.7 * cm))
+                    story.append(KeepTogether(all_elements))
+                else:
+                    unit1_elements = []
+                    unit1_elements.append(header_flowable)
+                    unit1_elements.append(header_spacer)
+                    
+                    start_char_idx = 0
+                    if stroke_elements:
+                        unit1_elements.extend(stroke_elements[0][1])
+                        start_char_idx = 1
+                        
+                    story.append(KeepTogether(unit1_elements))
+                    
+                    for char_idx in range(start_char_idx, len(stroke_elements)):
+                        story.append(KeepTogether([Spacer(1, 0.3 * cm)] + stroke_elements[char_idx][1]))
+                        
+                    sent_container = [Spacer(1, 0.3 * cm)] + sentence_elements
+                    if req.options.show_notes and word.note:
+                        sent_container.append(Spacer(1, 0.15 * cm))
+                        sent_container.append(Paragraph(f"({word.note})", styles['WordNote']))
+                    sent_container.append(Spacer(1, 0.7 * cm))
+                    story.append(KeepTogether(sent_container))
+            else:
+                # Setup columns and grid size based on length
+                if length <= 3:
+                    grid_size = 2.0 * cm
+                    cols = 8
+                    chunks_chars = [hanzi_list + [' '] * (cols - length)]
+                    chunks_pinyins = [pinyin_list + [''] * (cols - length)]
+                else:
+                    grid_size = (16.0 / 14.0) * cm
+                    cols = 14
+                    chunks_chars = []
+                    chunks_pinyins = []
+                    for offset in range(0, length, cols):
+                        chunk_c = hanzi_list[offset:offset+cols]
+                        chunk_p = pinyin_list[offset:offset+cols]
+                        chunks_chars.append(chunk_c + [' '] * (cols - len(chunk_c)))
+                        chunks_pinyins.append(chunk_p + [''] * (cols - len(chunk_p)))
+                
+                # Estimate block height
+                has_meaning = bool(word.meaning)
+                has_note = bool(word.note)
+                total_height = estimate_block_height(
+                    length, 
+                    req.options.extra_rows, 
+                    req.options.show_pinyin, 
+                    req.options.show_meaning, 
+                    req.options.show_notes, 
+                    has_meaning, 
+                    has_note
+                )
+                
+                if total_height <= 23.5 * cm:
+                    # Keep the whole block together on a single page
+                    all_elements = []
+                    all_elements.append(header_flowable)
+                    all_elements.append(header_spacer)
+                    
+                    # Add grids for each chunk
+                    for chunk_idx in range(len(chunks_chars)):
+                        if chunk_idx > 0:
+                            all_elements.append(Spacer(1, 0.3 * cm))
+                        
+                        chunk_c = chunks_chars[chunk_idx]
+                        chunk_p = chunks_pinyins[chunk_idx]
+                        
+                        if req.options.extra_rows == 0:
+                            r1 = TianzigeFlowable(chunk_c, chunk_p, grid_size, is_trace=True, grid_color=req.options.grid_color, font_name=ACTIVE_FONT, show_pinyin=req.options.show_pinyin)
+                            r1.hAlign = 'CENTER'
+                            r2 = TianzigeFlowable([' '] * cols, [''] * cols, grid_size, is_trace=False, grid_color=req.options.grid_color, font_name=ACTIVE_FONT, show_pinyin=False)
+                            r2.hAlign = 'CENTER'
+                            r3 = TianzigeFlowable([' '] * cols, [''] * cols, grid_size, is_trace=False, grid_color=req.options.grid_color, font_name=ACTIVE_FONT, show_pinyin=False)
+                            r3.hAlign = 'CENTER'
+                            
+                            all_elements.extend([r1, Spacer(1, 0.1 * cm), r2, Spacer(1, 0.1 * cm), r3])
+                        else:
+                            for pair_idx in range(req.options.extra_rows):
+                                r_trace = TianzigeFlowable(chunk_c, chunk_p, grid_size, is_trace=True, grid_color=req.options.grid_color, font_name=ACTIVE_FONT, show_pinyin=req.options.show_pinyin)
+                                r_trace.hAlign = 'CENTER'
+                                r_empty = TianzigeFlowable([' '] * cols, [''] * cols, grid_size, is_trace=False, grid_color=req.options.grid_color, font_name=ACTIVE_FONT, show_pinyin=False)
+                                r_empty.hAlign = 'CENTER'
+                                
+                                all_elements.extend([r_trace, Spacer(1, 0.1 * cm), r_empty])
+                                if pair_idx < req.options.extra_rows - 1:
+                                    all_elements.append(Spacer(1, 0.1 * cm))
+                                    
+                    if req.options.show_notes and word.note:
+                        all_elements.append(Spacer(1, 0.15 * cm))
+                        all_elements.append(Paragraph(f"({word.note})", styles['WordNote']))
+                        
+                    all_elements.append(Spacer(1, 0.7 * cm))
+                    story.append(KeepTogether(all_elements))
+                    
+                else:
+                    # Split flowables into smaller KeepTogether units to prevent layout break
+                    unit1_elements = []
+                    unit1_elements.append(header_flowable)
+                    unit1_elements.append(header_spacer)
+                    
+                    chunk_c = chunks_chars[0]
+                    chunk_p = chunks_pinyins[0]
                     
                     if req.options.extra_rows == 0:
                         r1 = TianzigeFlowable(chunk_c, chunk_p, grid_size, is_trace=True, grid_color=req.options.grid_color, font_name=ACTIVE_FONT, show_pinyin=req.options.show_pinyin)
@@ -578,120 +917,84 @@ def generate_pdf(req: GenerateRequest):
                         r3 = TianzigeFlowable([' '] * cols, [''] * cols, grid_size, is_trace=False, grid_color=req.options.grid_color, font_name=ACTIVE_FONT, show_pinyin=False)
                         r3.hAlign = 'CENTER'
                         
-                        all_elements.extend([r1, Spacer(1, 0.1 * cm), r2, Spacer(1, 0.1 * cm), r3])
+                        unit1_elements.extend([r1, Spacer(1, 0.1 * cm), r2, Spacer(1, 0.1 * cm), r3])
+                        story.append(KeepTogether(unit1_elements))
+                        
+                        # Subsequent chunks (if any)
+                        for chunk_idx in range(1, len(chunks_chars)):
+                            c_elements = []
+                            c_elements.append(Spacer(1, 0.3 * cm))
+                            
+                            cc_c = chunks_chars[chunk_idx]
+                            cc_p = chunks_pinyins[chunk_idx]
+                            
+                            cr1 = TianzigeFlowable(cc_c, cc_p, grid_size, is_trace=True, grid_color=req.options.grid_color, font_name=ACTIVE_FONT, show_pinyin=req.options.show_pinyin)
+                            cr1.hAlign = 'CENTER'
+                            cr2 = TianzigeFlowable([' '] * cols, [''] * cols, grid_size, is_trace=False, grid_color=req.options.grid_color, font_name=ACTIVE_FONT, show_pinyin=False)
+                            cr2.hAlign = 'CENTER'
+                            cr3 = TianzigeFlowable([' '] * cols, [''] * cols, grid_size, is_trace=False, grid_color=req.options.grid_color, font_name=ACTIVE_FONT, show_pinyin=False)
+                            cr3.hAlign = 'CENTER'
+                            
+                            c_elements.extend([cr1, Spacer(1, 0.1 * cm), cr2, Spacer(1, 0.1 * cm), cr3])
+                            
+                            if chunk_idx == len(chunks_chars) - 1 and req.options.show_notes and word.note:
+                                c_elements.append(Spacer(1, 0.15 * cm))
+                                c_elements.append(Paragraph(f"({word.note})", styles['WordNote']))
+                            
+                            c_elements.append(Spacer(1, 0.7 * cm))
+                            story.append(KeepTogether(c_elements))
+                            
+                        if len(chunks_chars) == 1 and req.options.show_notes and word.note:
+                            story.append(KeepTogether([
+                                Spacer(1, 0.15 * cm),
+                                Paragraph(f"({word.note})", styles['WordNote']),
+                                Spacer(1, 0.7 * cm)
+                            ]))
+                        elif len(chunks_chars) == 1:
+                            story.append(Spacer(1, 0.7 * cm))
                     else:
-                        for pair_idx in range(req.options.extra_rows):
-                            r_trace = TianzigeFlowable(chunk_c, chunk_p, grid_size, is_trace=True, grid_color=req.options.grid_color, font_name=ACTIVE_FONT, show_pinyin=req.options.show_pinyin)
-                            r_trace.hAlign = 'CENTER'
-                            r_empty = TianzigeFlowable([' '] * cols, [''] * cols, grid_size, is_trace=False, grid_color=req.options.grid_color, font_name=ACTIVE_FONT, show_pinyin=False)
-                            r_empty.hAlign = 'CENTER'
+                        # First pair of Chunk 0 goes to Unit 1
+                        r_trace = TianzigeFlowable(chunk_c, chunk_p, grid_size, is_trace=True, grid_color=req.options.grid_color, font_name=ACTIVE_FONT, show_pinyin=req.options.show_pinyin)
+                        r_trace.hAlign = 'CENTER'
+                        r_empty = TianzigeFlowable([' '] * cols, [''] * cols, grid_size, is_trace=False, grid_color=req.options.grid_color, font_name=ACTIVE_FONT, show_pinyin=False)
+                        r_empty.hAlign = 'CENTER'
+                        
+                        unit1_elements.extend([r_trace, Spacer(1, 0.1 * cm), r_empty])
+                        
+                        has_more_content = (req.options.extra_rows > 1) or (len(chunks_chars) > 1) or (req.options.show_notes and word.note)
+                        if not has_more_content:
+                            unit1_elements.append(Spacer(1, 0.7 * cm))
                             
-                            all_elements.extend([r_trace, Spacer(1, 0.1 * cm), r_empty])
-                            if pair_idx < req.options.extra_rows - 1:
-                                all_elements.append(Spacer(1, 0.1 * cm))
-                                
-                if req.options.show_notes and word.note:
-                    all_elements.append(Spacer(1, 0.15 * cm))
-                    all_elements.append(Paragraph(f"({word.note})", styles['WordNote']))
-                    
-                all_elements.append(Spacer(1, 0.7 * cm))
-                story.append(KeepTogether(all_elements))
-                
-            else:
-                # Split flowables into smaller KeepTogether units to prevent layout break
-                unit1_elements = []
-                unit1_elements.append(header_flowable)
-                unit1_elements.append(header_spacer)
-                
-                chunk_c = chunks_chars[0]
-                chunk_p = chunks_pinyins[0]
-                
-                if req.options.extra_rows == 0:
-                    r1 = TianzigeFlowable(chunk_c, chunk_p, grid_size, is_trace=True, grid_color=req.options.grid_color, font_name=ACTIVE_FONT, show_pinyin=req.options.show_pinyin)
-                    r1.hAlign = 'CENTER'
-                    r2 = TianzigeFlowable([' '] * cols, [''] * cols, grid_size, is_trace=False, grid_color=req.options.grid_color, font_name=ACTIVE_FONT, show_pinyin=False)
-                    r2.hAlign = 'CENTER'
-                    r3 = TianzigeFlowable([' '] * cols, [''] * cols, grid_size, is_trace=False, grid_color=req.options.grid_color, font_name=ACTIVE_FONT, show_pinyin=False)
-                    r3.hAlign = 'CENTER'
-                    
-                    unit1_elements.extend([r1, Spacer(1, 0.1 * cm), r2, Spacer(1, 0.1 * cm), r3])
-                    story.append(KeepTogether(unit1_elements))
-                    
-                    # Subsequent chunks (if any)
-                    for chunk_idx in range(1, len(chunks_chars)):
-                        c_elements = []
-                        c_elements.append(Spacer(1, 0.3 * cm))
+                        story.append(KeepTogether(unit1_elements))
                         
-                        cc_c = chunks_chars[chunk_idx]
-                        cc_p = chunks_pinyins[chunk_idx]
-                        
-                        cr1 = TianzigeFlowable(cc_c, cc_p, grid_size, is_trace=True, grid_color=req.options.grid_color, font_name=ACTIVE_FONT, show_pinyin=req.options.show_pinyin)
-                        cr1.hAlign = 'CENTER'
-                        cr2 = TianzigeFlowable([' '] * cols, [''] * cols, grid_size, is_trace=False, grid_color=req.options.grid_color, font_name=ACTIVE_FONT, show_pinyin=False)
-                        cr2.hAlign = 'CENTER'
-                        cr3 = TianzigeFlowable([' '] * cols, [''] * cols, grid_size, is_trace=False, grid_color=req.options.grid_color, font_name=ACTIVE_FONT, show_pinyin=False)
-                        cr3.hAlign = 'CENTER'
-                        
-                        c_elements.extend([cr1, Spacer(1, 0.1 * cm), cr2, Spacer(1, 0.1 * cm), cr3])
-                        
-                        if chunk_idx == len(chunks_chars) - 1 and req.options.show_notes and word.note:
-                            c_elements.append(Spacer(1, 0.15 * cm))
-                            c_elements.append(Paragraph(f"({word.note})", styles['WordNote']))
-                        
-                        c_elements.append(Spacer(1, 0.7 * cm))
-                        story.append(KeepTogether(c_elements))
-                        
-                    if len(chunks_chars) == 1 and req.options.show_notes and word.note:
-                        story.append(KeepTogether([
-                            Spacer(1, 0.15 * cm),
-                            Paragraph(f"({word.note})", styles['WordNote']),
-                            Spacer(1, 0.7 * cm)
-                        ]))
-                    elif len(chunks_chars) == 1:
-                        story.append(Spacer(1, 0.7 * cm))
-                else:
-                    # First pair of Chunk 0 goes to Unit 1
-                    r_trace = TianzigeFlowable(chunk_c, chunk_p, grid_size, is_trace=True, grid_color=req.options.grid_color, font_name=ACTIVE_FONT, show_pinyin=req.options.show_pinyin)
-                    r_trace.hAlign = 'CENTER'
-                    r_empty = TianzigeFlowable([' '] * cols, [''] * cols, grid_size, is_trace=False, grid_color=req.options.grid_color, font_name=ACTIVE_FONT, show_pinyin=False)
-                    r_empty.hAlign = 'CENTER'
-                    
-                    unit1_elements.extend([r_trace, Spacer(1, 0.1 * cm), r_empty])
-                    
-                    has_more_content = (req.options.extra_rows > 1) or (len(chunks_chars) > 1) or (req.options.show_notes and word.note)
-                    if not has_more_content:
-                        unit1_elements.append(Spacer(1, 0.7 * cm))
-                        
-                    story.append(KeepTogether(unit1_elements))
-                    
-                    # Subsequent pairs and chunks
-                    for chunk_idx in range(len(chunks_chars)):
-                        chunk_c = chunks_chars[chunk_idx]
-                        chunk_p = chunks_pinyins[chunk_idx]
-                        
-                        start_pair = 1 if chunk_idx == 0 else 0
-                        for pair_idx in range(start_pair, req.options.extra_rows):
-                            pair_elements = []
-                            if chunk_idx > 0 and pair_idx == 0:
-                                pair_elements.append(Spacer(1, 0.3 * cm))
-                            else:
-                                pair_elements.append(Spacer(1, 0.1 * cm))
-                                
-                            cr_trace = TianzigeFlowable(chunk_c, chunk_p, grid_size, is_trace=True, grid_color=req.options.grid_color, font_name=ACTIVE_FONT, show_pinyin=req.options.show_pinyin)
-                            cr_trace.hAlign = 'CENTER'
-                            cr_empty = TianzigeFlowable([' '] * cols, [''] * cols, grid_size, is_trace=False, grid_color=req.options.grid_color, font_name=ACTIVE_FONT, show_pinyin=False)
-                            cr_empty.hAlign = 'CENTER'
+                        # Subsequent pairs and chunks
+                        for chunk_idx in range(len(chunks_chars)):
+                            chunk_c = chunks_chars[chunk_idx]
+                            chunk_p = chunks_pinyins[chunk_idx]
                             
-                            pair_elements.extend([cr_trace, Spacer(1, 0.1 * cm), cr_empty])
-                            
-                            is_last_pair = (chunk_idx == len(chunks_chars) - 1) and (pair_idx == req.options.extra_rows - 1)
-                            if is_last_pair:
-                                if req.options.show_notes and word.note:
-                                    pair_elements.append(Spacer(1, 0.15 * cm))
-                                    pair_elements.append(Paragraph(f"({word.note})", styles['WordNote']))
-                                pair_elements.append(Spacer(1, 0.7 * cm))
+                            start_pair = 1 if chunk_idx == 0 else 0
+                            for pair_idx in range(start_pair, req.options.extra_rows):
+                                pair_elements = []
+                                if chunk_idx > 0 and pair_idx == 0:
+                                    pair_elements.append(Spacer(1, 0.3 * cm))
+                                else:
+                                    pair_elements.append(Spacer(1, 0.1 * cm))
+                                    
+                                cr_trace = TianzigeFlowable(chunk_c, chunk_p, grid_size, is_trace=True, grid_color=req.options.grid_color, font_name=ACTIVE_FONT, show_pinyin=req.options.show_pinyin)
+                                cr_trace.hAlign = 'CENTER'
+                                cr_empty = TianzigeFlowable([' '] * cols, [''] * cols, grid_size, is_trace=False, grid_color=req.options.grid_color, font_name=ACTIVE_FONT, show_pinyin=False)
+                                cr_empty.hAlign = 'CENTER'
                                 
-                            story.append(KeepTogether(pair_elements))
+                                pair_elements.extend([cr_trace, Spacer(1, 0.1 * cm), cr_empty])
+                                
+                                is_last_pair = (chunk_idx == len(chunks_chars) - 1) and (pair_idx == req.options.extra_rows - 1)
+                                if is_last_pair:
+                                    if req.options.show_notes and word.note:
+                                        pair_elements.append(Spacer(1, 0.15 * cm))
+                                        pair_elements.append(Paragraph(f"({word.note})", styles['WordNote']))
+                                    pair_elements.append(Spacer(1, 0.7 * cm))
+                                    
+                                story.append(KeepTogether(pair_elements))
             
         # 2B. APPEND EMPTY PRACTICE PAGES
         if req.options.empty_pages and req.options.empty_pages > 0:
