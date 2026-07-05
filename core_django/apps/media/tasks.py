@@ -4,7 +4,6 @@ from django.core.cache import cache
 from celery import shared_task
 from apps.dictionary_zh.models import ZhWord
 from apps.dictionary_en.models import EnWord
-from apps.media.models import ZhEnMapping
 from core_project.ws_utils import ws_notify
 
 logger = logging.getLogger(__name__)
@@ -24,67 +23,40 @@ def get_word_by_id(word_id, lang):
 
 def _resolve_image_prompt(word_id, lang, word):
     """
-    Chiến lược xây dựng Prompt cho AI tạo ảnh:
-    1. Nếu có ZhEnMapping.image_caption: dùng nó để dựng prompt trực quan.
-    2. Nếu không có: dùng phương án fallback (graceful degradation) dựa trên từ nghĩa tiếng Anh của từ.
+    Builds image prompt for AI generation:
+    - Uses the first available dictionary example sentence (in Vietnamese / translation if available, or original)
+    - Fallback: Uses the vocabulary word itself if no example exists
+    - Implements strict realistic photography or 3D real-world rendering style to represent the concept visually without diagrams, text, labels, or typography.
     """
-    caption = ""
+    # 1. Fetch concept sentence description (prefer example)
+    concept_description = ""
     try:
-        if lang == 'zh':
-            mapping = ZhEnMapping.objects.filter(zh_word_id=word_id).select_related('en_word').first()
-        else:
-            mapping = ZhEnMapping.objects.filter(en_word_id=word_id).select_related('en_word').first()
-
-        if mapping and mapping.image_caption:
-            caption = mapping.image_caption
-        elif mapping and mapping.en_word:
-            caption = f"the word '{mapping.en_word.word}'"
+        # Retrieve the first example related to the word
+        first_example = word.examples.first() if hasattr(word, 'examples') else None
+        if first_example:
+            # Prefer vietnamese translation for better description if available, otherwise original sentence
+            concept_description = getattr(first_example, 'vietnamese', '') or getattr(first_example, 'english', '') or getattr(first_example, 'chinese', '')
+            concept_description = concept_description.strip()
     except Exception as e:
-        logger.warning(f"ZhEnMapping lookup failed for {word_id}: {e}")
+        logger.warning(f"Error fetching examples for word_id={word_id}: {e}")
 
-    # Fallback if no caption found
-    if not caption:
-        translation_en = getattr(word, 'translation_en', '') or ''
-        if translation_en:
-            first_keyword = translation_en.split(',')[0].strip()
-            if first_keyword:
-                caption = f"the concept of '{first_keyword}'"
-        
-    if not caption:
-        caption = f"the concept of '{word.word}'"
+    # Fallback to word text itself if no example found
+    if not concept_description:
+        concept_description = word.word if hasattr(word, 'word') else str(word)
 
-    # Xây dựng prompt hoàn chỉnh với phong cách thiết kế phẳng (flat design vector)
-    # Lớp chỉ thị phong cách cốt lõi (Style Base) - Đảm bảo thẩm mỹ và chặn text tuyệt đối
+    # 2. Strict Style Base (Realistic / 3D Photography, banning diagrams, text, letters, icons, sketches)
     style_base = (
-        "Flat design educational vector illustration. Modern clean graphic style, "
-        "infographic layout, solid white background, minimalist aesthetic, vibrant harmonious color palette. "
-        "Strictly NO text, no words, no letters, no labels, no typography, zero characters, clean diagram style."
+        "High-quality commercial photography, realistic 3D real-world rendering, detailed texture, depth of field, "
+        "studio lighting. Solid realistic representation of the object or scene. "
+        "Strictly NO text, NO words, NO letters, NO labels, NO typography, NO symbols, NO characters. "
+        "Strictly NO diagrams, NO schematics, NO flat vectors, NO illustrations, NO sketches, NO infographics."
     )
 
-    # Kỹ thuật bóc tách khái niệm trực quan (Explaining via visual breakdown)
-    explanation_instruction = (
-        "The illustration must visually explain the concept. "
-        "Break down the subject into key functional elements, intuitive visual metaphors, "
-        "and symbolic components arranged in a clear, step-by-step flow or cohesive assembly."
+    prompt = (
+        f"{style_base} "
+        f"A beautiful real-world photograph or 3D realistic rendering representing the following concept: '{concept_description}'. "
+        f"Focus entirely on depicting the realistic subject, object, or action. Clean backdrop, zero text on screen."
     )
-
-    if lang == 'zh' and word:
-        # Lấy thuộc tính word hoặc key tùy theo cấu trúc object của muội
-        word_str = word.word if hasattr(word, 'word') else str(word)
-    
-    # Đưa từ tiếng Trung vào làm ngữ cảnh ẩn dụ cho AI hiểu sâu hơn ý nghĩa,
-    # nhưng dặn AI KHÔNG được vẽ chữ đó ra.
-        prompt = (
-            f"{style_base} "
-            f"An educational diagram visually explaining the concept of '{caption}' (inspired by the meaning of '{word_str}'). Strictly NO text, no words, no letters, no labels, no typography, zero characters, clean diagram style. "
-            f"{explanation_instruction}"
-        )   
-    else:
-        prompt = (
-            f"{style_base} "
-            f"An educational diagram visually explaining the concept of '{caption}'. Strictly NO text, no words, no letters, no labels, no typography, zero characters, clean diagram style."
-            f"{explanation_instruction}"
-        )
     return prompt
 
 
