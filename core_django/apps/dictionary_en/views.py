@@ -8,7 +8,7 @@ from celery.result import AsyncResult
 import re
 from django.db.models import Q, Case, When, Value, IntegerField, F, Exists, OuterRef
 from django.contrib.postgres.search import SearchQuery
-from django.db.models.functions import Length, StrIndex
+from django.db.models.functions import Length, StrIndex, Lower
 
 from .models import EnWord, EnExample
 from .serializers import EnWordSerializer
@@ -241,6 +241,27 @@ class EnWordSearchView(generics.ListAPIView):
                 )
             )
 
+        # Annotate translation matching index and CEFR priority for ranking
+        queryset = queryset.annotate(
+            translation_index=StrIndex(Lower(F('translation_vi')), Value(q_lower)),
+            cefr_priority=Case(
+                When(cefr_level__iexact='A1', then=Value(6)),
+                When(cefr_level__iexact='A2', then=Value(5)),
+                When(cefr_level__iexact='B1', then=Value(4)),
+                When(cefr_level__iexact='B2', then=Value(3)),
+                When(cefr_level__iexact='C1', then=Value(2)),
+                When(cefr_level__iexact='C2', then=Value(1)),
+                default=Value(0),
+                output_field=IntegerField(),
+            )
+        ).annotate(
+            adjusted_trans_index=Case(
+                When(translation_index=0, then=Value(999999)),
+                default='translation_index',
+                output_field=IntegerField(),
+            )
+        )
+
         # 3. Conditional sorting length exclusively for Match Level 5
         queryset = queryset.annotate(
             reverse_sort_len=Case(
@@ -257,7 +278,7 @@ class EnWordSearchView(generics.ListAPIView):
             queryset = queryset.filter(match_level__lte=4)
             
         # 5. Final Sort Order
-        queryset = queryset.order_by('match_level', '-reverse_sort_len', 'word')
+        queryset = queryset.order_by('match_level', 'adjusted_trans_index', '-cefr_priority', '-reverse_sort_len', 'word')
         
         return queryset
 
