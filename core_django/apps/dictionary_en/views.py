@@ -31,6 +31,7 @@ class EnWordSearchView(generics.ListAPIView):
 
         def db_lookup():
             exact_example = None
+            match = None
             cleaned_for_search = re.sub(r'[. , ! ? : ; ( ) \[ \] { } “ ” ‘ ’ \' "]+', ' ', query).strip()
             query_word_len = len(cleaned_for_search.split())
 
