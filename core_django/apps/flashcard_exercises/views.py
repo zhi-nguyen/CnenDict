@@ -1,3 +1,4 @@
+import re
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -136,8 +137,52 @@ class CheckWritingView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        user_id = str(request.user.id)
+        # Language validation
+        if lang == 'zh':
+            if not re.search(r'[\u4e00-\u9fff]', sentence):
+                return Response(
+                    {"error": "Vui lòng viết câu bằng tiếng Trung (chữ Hán)."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            if re.search(r'[a-zA-Z]', sentence):
+                return Response(
+                    {"error": "Câu viết tiếng Trung không được chứa các từ không phải tiếng Trung (chữ Latin)."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        elif lang == 'en':
+            if not re.search(r'[a-zA-Z]', sentence):
+                return Response(
+                    {"error": "Vui lòng viết câu bằng tiếng Anh."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            if re.search(r'[\u4e00-\u9fff]', sentence):
+                return Response(
+                    {"error": "Câu viết tiếng Anh không được chứa chữ Trung Quốc."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
         user_tier = getattr(request.user.subscription, 'tier', 'Free') if hasattr(request.user, 'subscription') else 'Free'
+        if user_tier == 'Free':
+            return Response(
+                {"error": "Writing exercise AI evaluation is only available for VIP/Premium users."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Word/character count validation (limit 30)
+        if lang == 'en':
+            word_count = len(sentence.split())
+            limit_msg = "Câu viết tiếng Anh không được vượt quá 30 từ."
+        else:
+            word_count = len(sentence.replace(' ', ''))
+            limit_msg = "Câu viết tiếng Trung không được vượt quá 30 chữ."
+
+        if word_count > 30:
+            return Response(
+                {"error": limit_msg},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        user_id = str(request.user.id)
         task = check_writing_task.apply_async(
             args=[sentence, target_word, lang],
             kwargs={'user_id': user_id, 'user_tier': user_tier}
@@ -181,3 +226,106 @@ class CompleteExerciseView(APIView):
             "created": created,
             "exercise_id": str(exercise.id)
         }, status=status.HTTP_200_OK)
+
+
+class CheckGeneralWritingView(APIView):
+    """
+    POST /api/v1/flashcard/check-general-writing/
+    Body: { "sentence": "...", "lang": "zh" }
+    
+    Trigger general writing check using AI.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        sentence = request.data.get('sentence', '').strip()
+        lang = request.data.get('lang', 'zh').strip()
+
+        if not sentence:
+            return Response(
+                {"error": "Field 'sentence' is required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Language validation
+        if lang == 'zh':
+            if not re.search(r'[\u4e00-\u9fff]', sentence):
+                return Response(
+                    {"error": "Vui lòng viết đoạn văn bằng tiếng Trung (chữ Hán)."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            if re.search(r'[a-zA-Z]', sentence):
+                return Response(
+                    {"error": "Đoạn văn viết tiếng Trung không được chứa các từ không phải tiếng Trung (chữ Latin)."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        elif lang == 'en':
+            if not re.search(r'[a-zA-Z]', sentence):
+                return Response(
+                    {"error": "Vui lòng viết đoạn văn bằng tiếng Anh."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            if re.search(r'[\u4e00-\u9fff]', sentence):
+                return Response(
+                    {"error": "Đoạn văn viết tiếng Anh không được chứa chữ Trung Quốc."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        user_tier = getattr(request.user.subscription, 'tier', 'Free') if hasattr(request.user, 'subscription') else 'Free'
+        if user_tier == 'Free':
+            return Response(
+                {"error": "Writing evaluation is only available for VIP/Premium users."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        try:
+            from apps.core_shared.ai_client import get_genai_client
+            from google.genai import errors
+
+            client = get_genai_client()
+            
+            # System prompt and user prompt
+            lang_name = "tiếng Trung" if lang == "zh" else "tiếng Anh"
+            system_instruction = f"""Bạn là một trợ lý AI giáo dục chấm bài viết của học sinh bằng {lang_name}.
+Nhiệm vụ của bạn là kiểm tra xem đoạn văn/câu do học sinh tự viết có viết đúng ngữ pháp hay không, đánh giá từ vựng, ngữ pháp và sự mạch lạc.
+Bạn phải trả về một đối tượng JSON hợp lệ duy nhất có cấu trúc sau, không kèm bất kỳ giải thích nào khác ngoài JSON:
+
+{{
+  "score": 85, // Điểm số từ 0 đến 100
+  "is_correct": true, // true nếu đúng ngữ pháp hoàn toàn hoặc chỉ có lỗi cực nhỏ, false nếu sai ngữ pháp nghiêm trọng
+  "feedback": "Nhận xét chi tiết bằng tiếng Việt về đoạn văn viết của học sinh, chỉ ra các lỗi sai ngữ pháp, từ vựng hoặc cách diễn đạt nếu có.",
+  "suggestion": "Đoạn văn gợi ý viết lại chuẩn xác và tự nhiên hơn."
+}}
+"""
+            prompt = f"Ngôn ngữ: '{lang_name}'. Bài viết của học sinh: '{sentence}'."
+
+            response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=prompt,
+                config={
+                    'system_instruction': system_instruction,
+                    'response_mime_type': 'application/json'
+                }
+            )
+
+            raw_text = response.text
+            from .tasks import clean_json_string
+            cleaned_text = clean_json_string(raw_text)
+            
+            # Load as JSON to ensure validity
+            import json
+            result_data = json.loads(cleaned_text)
+
+            return Response({
+                'status': 'SUCCESS',
+                'result': result_data
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error in CheckGeneralWritingView: {e}")
+            return Response(
+                {"error": "Failed to evaluate writing exercise."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

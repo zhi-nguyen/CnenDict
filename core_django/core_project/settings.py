@@ -216,6 +216,7 @@ SIMPLE_JWT = {
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
     'AUTH_HEADER_TYPES': ('Bearer',),
+    'SIGNING_KEY': JWT_SECRET_KEY,
     
     # Cookie configurations
     'AUTH_COOKIE': 'access_token',

@@ -62,61 +62,18 @@ def _resolve_image_prompt(word_id, lang, word):
 
 @shared_task
 def generate_word_image_task(word_id, lang, user_id, **kwargs):
-    logger.info(f"Celery task: generating image for word_id={word_id}, lang={lang}, user={user_id}")
-    word = get_word_by_id(word_id, lang)
+    logger.info(f"Celery task: image generation is disabled. word_id={word_id}, lang={lang}")
     redis_key = f"img:{lang}:{word_id}"
+    cache.set(redis_key, {"status": "collecting"}, timeout=300)
     
-    if not word:
-        logger.error(f"Word {word_id} ({lang}) not found for image generation.")
-        cache.delete(redis_key)
-        return
-        
-    # Build a high quality prompt — Ưu tiên tuyệt đối ZhEnMapping.image_caption
-    prompt = _resolve_image_prompt(word_id, lang, word)
-    try:
-        res = requests.post(IMAGE_SERVICE_URL, json={
-            "word_id": str(word_id),
-            "lang": lang,
-            "prompt": prompt
-        }, timeout=60)
-        
-        if res.status_code == 200:
-            data = res.json()
-            image_url = data.get("image_url")
-            if image_url:
-                # Save to database
-                word.image_url = image_url
-                word.save()
-                
-                # Cache to Redis
-                cache_data = {"status": "ready", "image_url": image_url}
-                cache.set(redis_key, cache_data, timeout=None)
-                
-                # Notify client via WebSocket
-                ws_notify(
-                    user_id=user_id,
-                    event_type="image_complete",
-                    title="Hình ảnh đã tải xong",
-                    payload={"word_id": word_id, "image_url": image_url},
-                    persist=False,
-                )
-                logger.info(f"Successfully generated and cached GCS image: {image_url}")
-                return
-        
-        raise Exception(f"Image service returned status {res.status_code}: {res.text}")
-        
-    except Exception as e:
-        logger.error(f"Failed to generate image for {word.word} ({word_id}): {e}")
-        # Evict lock/cache so it can retry
-        cache.delete(redis_key)
-        # Notify failure via WS
-        ws_notify(
-            user_id=user_id,
-            event_type="image_failed",
-            title="Lỗi tải hình ảnh",
-            payload={"word_id": word_id, "error": str(e)},
-            persist=False,
-        )
+    # Notify client via WebSocket about the collecting state
+    ws_notify(
+        user_id=user_id,
+        event_type="image_complete",
+        title="Đang thu thập hình ảnh",
+        payload={"word_id": word_id, "image_url": None, "status": "collecting"},
+        persist=False,
+    )
 
 @shared_task
 def trigger_image_regeneration_task(word_id, lang, user_id, **kwargs):

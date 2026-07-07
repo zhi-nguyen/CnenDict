@@ -61,6 +61,7 @@ class Section(models.Model):
     part_number = models.IntegerField(help_text="Số thứ tự phần trong kỹ năng")
     instruction = models.TextField(blank=True, default="", help_text="Hướng dẫn bằng tiếng Trung, VD: 第一部分：听录音，判断对错")
     section_audio_url = models.URLField(max_length=500, blank=True, default="", help_text="URL audio chung cho cả section")
+    passage = models.JSONField(null=True, blank=True, help_text="Đoạn văn đọc hiểu của section này (chứa title và content)")
     ordering = models.IntegerField(default=0, help_text="Thứ tự hiển thị")
 
     class Meta:
@@ -70,26 +71,6 @@ class Section(models.Model):
 
     def __str__(self):
         return f"{self.exam.level} | {self.section_name} Part {self.part_number}"
-
-
-class Paragraph(models.Model):
-    """
-    Đoạn văn đọc hiểu dài dùng chung cho nhiều câu hỏi.
-    Được tạo trực tiếp từ trường 'paragraph' trong JSON câu hỏi mới.
-    """
-    section = models.ForeignKey(Section, on_delete=models.CASCADE, related_name="paragraphs")
-    paragraph_id = models.CharField(max_length=100)
-    title = models.CharField(max_length=200, blank=True, default="")
-    content = models.TextField(help_text="Nội dung đoạn văn dài")
-    ordering = models.IntegerField(default=0)
-
-    class Meta:
-        db_table = "exams_paragraph"
-        ordering = ["section", "ordering"]
-        unique_together = [["section", "paragraph_id"]]
-
-    def __str__(self):
-        return f"{self.paragraph_id}: {self.title or self.content[:50]}"
 
 
 class Question(models.Model):
@@ -112,14 +93,6 @@ class Question(models.Model):
     ]
 
     section = models.ForeignKey(Section, on_delete=models.CASCADE, related_name="questions")
-    paragraph = models.ForeignKey(
-        'Paragraph',
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="questions",
-        help_text="Đoạn văn đọc hiểu của câu hỏi này"
-    )
     question_id = models.CharField(max_length=100, help_text="VD: q_listen_001")
     question_type = models.CharField(max_length=30, choices=QUESTION_TYPE_CHOICES)
     difficulty = models.CharField(max_length=20, choices=DIFFICULTY_CHOICES, default="easy")

@@ -24,6 +24,24 @@ class TriggerTTSView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # Validate text length based on language
+        has_chinese = any('\u4e00' <= char <= '\u9fff' for char in text)
+        if has_chinese:
+            # Chinese character limit
+            if len(text) > 200:
+                return Response(
+                    {"error": "Độ dài văn bản phát âm tiếng Trung không được vượt quá 200 ký tự."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        else:
+            # English word limit
+            word_count = len(text.split())
+            if word_count > 200:
+                return Response(
+                    {"error": "Độ dài văn bản phát âm tiếng Anh không được vượt quá 200 từ."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
         # 1. Compute MD5 cache key
         text_hash = hashlib.md5(f"{text}:{voice}".encode('utf-8')).hexdigest()
         cache_key = f"tts:audio:{text_hash}"

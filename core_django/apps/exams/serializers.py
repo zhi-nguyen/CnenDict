@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Exam, Section, Paragraph, Question, Option
+from .models import Exam, Section, Question, Option
 
 
 class OptionSerializer(serializers.ModelSerializer):
@@ -8,15 +8,9 @@ class OptionSerializer(serializers.ModelSerializer):
         fields = ['id', 'option_id', 'text', 'image_url', 'image_description', 'ordering']
 
 
-class ParagraphSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Paragraph
-        fields = ['id', 'paragraph_id', 'title', 'content', 'ordering']
-
-
 class QuestionSerializer(serializers.ModelSerializer):
     options = OptionSerializer(many=True, read_only=True)
-    paragraph = ParagraphSerializer(read_only=True)
+    paragraph = serializers.SerializerMethodField()
 
     class Meta:
         model = Question
@@ -27,16 +21,20 @@ class QuestionSerializer(serializers.ModelSerializer):
             'correct_answer', 'explanation', 'ordering', 'options', 'paragraph'
         ]
 
+    def get_paragraph(self, obj):
+        # Backward compatibility with frontend:
+        # Return the section's passage if it exists.
+        return obj.section.passage
+
 
 class SectionSerializer(serializers.ModelSerializer):
     questions = QuestionSerializer(many=True, read_only=True)
-    paragraphs = ParagraphSerializer(many=True, read_only=True)
 
     class Meta:
         model = Section
         fields = [
             'id', 'section_id', 'section_name', 'part_number', 'instruction',
-            'section_audio_url', 'ordering', 'questions', 'paragraphs'
+            'section_audio_url', 'ordering', 'questions', 'passage'
         ]
 
 

@@ -170,18 +170,24 @@ def generate_exercises_task(self, word, lang, user_id=None, **kwargs):
         for ex_type in ['reading', 'listening']:
             if ex_type in parsed:
                 content = parsed[ex_type]
+                audio_url = ""
+                if ex_type == 'listening':
+                    sentence = content.get('sentence', '')
+                    if sentence:
+                        audio_url = call_tts_service(sentence, lang)
+
                 exercise = FlashcardExercise.objects.create(
                     word=word,
                     lang=lang,
                     exercise_type=ex_type,
                     content=content,
-                    audio_url=""
+                    audio_url=audio_url
                 )
-                
+
                 created_exercises[ex_type] = {
                     'id': str(exercise.id),
                     'content': content,
-                    'audio_url': ""
+                    'audio_url': audio_url
                 }
 
         # Clear Redis processing flag
