@@ -47,6 +47,19 @@ def sync_firebase_avatar_task(self, user_id, picture_url):
                 filename = f"avatar_{user.firebase_uid}.jpg"
                 user.avatar.save(filename, ContentFile(avatar_response.content), save=True)
                 logger.info(f"Successfully synced Firebase avatar for user {user.id}")
+                
+                # Send WebSocket notification to user in real-time
+                try:
+                    from core_project.ws_utils import ws_notify
+                    ws_notify(
+                        user_id=user.id,
+                        event_type="avatar_complete",
+                        title="Đồng bộ ảnh đại diện thành công",
+                        payload={"avatar_url": user.avatar.url},
+                        persist=False,
+                    )
+                except Exception as ws_err:
+                    logger.error(f"Failed to send avatar_complete ws notification for user {user.id}: {ws_err}")
             else:
                 logger.warning(f"Failed to fetch avatar from {picture_url}, status code: {avatar_response.status_code}")
         else:
