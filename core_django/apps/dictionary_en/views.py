@@ -163,7 +163,9 @@ class EnWordSearchView(generics.ListAPIView):
             # 1. Vietnamese Query Flow: Search translation_vi and vietnamese in examples
             filter_q = Q(translation_vi__icontains=q_lower)
             
-            if len(cleaned_query) >= 2:
+            # Skip example search for short queries (< 2 words) — common words match too many examples
+            query_word_count = len(cleaned_query.split())
+            if query_word_count >= 2:
                 # Find matching word IDs from examples (trigram index scan)
                 example_word_ids = list(
                     EnExample.objects.filter(
@@ -175,9 +177,12 @@ class EnWordSearchView(generics.ListAPIView):
 
             queryset = queryset.filter(filter_q)
             
-            has_example_match = Exists(
-                EnExample.objects.filter(word_id=OuterRef('pk'), vietnamese__icontains=cleaned_query)
-            )
+            if query_word_count >= 2:
+                has_example_match = Exists(
+                    EnExample.objects.filter(word_id=OuterRef('pk'), vietnamese__icontains=cleaned_query)
+                )
+            else:
+                has_example_match = Value(False)
             
             # Match levels for Vietnamese: 3, 4, 5
             queryset = queryset.annotate(
@@ -196,10 +201,11 @@ class EnWordSearchView(generics.ListAPIView):
             # 2. English Query Flow: Search English word and search_vector in examples
             filter_q = Q(word__iexact=cleaned_query) | Q(word__istartswith=cleaned_query)
             
-            # SearchQuery for FTS Search on english config
-            query_obj = SearchQuery(cleaned_query, config='english')
-            
+            # Skip FTS on examples for short queries (< 2 chars) — single letters match nearly all examples
             if len(cleaned_query) >= 2:
+                # SearchQuery for FTS Search on english config
+                query_obj = SearchQuery(cleaned_query, config='english')
+                
                 # Find matching word IDs from examples using English FTS only
                 example_word_ids = list(
                     EnExample.objects.filter(
@@ -222,9 +228,12 @@ class EnWordSearchView(generics.ListAPIView):
 
             queryset = queryset.filter(filter_q)
             
-            has_example_match = Exists(
-                EnExample.objects.filter(word_id=OuterRef('pk'), search_vector=query_obj)
-            )
+            if len(cleaned_query) >= 2:
+                has_example_match = Exists(
+                    EnExample.objects.filter(word_id=OuterRef('pk'), search_vector=query_obj)
+                )
+            else:
+                has_example_match = Value(False)
             
             # Match levels for English: 1, 2, 4, 5
             queryset = queryset.annotate(

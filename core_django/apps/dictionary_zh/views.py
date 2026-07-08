@@ -175,17 +175,18 @@ class ZhWordSearchView(generics.ListAPIView):
             filter_q = Q(word__exact=cleaned_query) | Q(traditional__exact=cleaned_query) | \
                        Q(word__startswith=cleaned_query) | Q(traditional__startswith=cleaned_query)
             
-            # Tokenize query for FTS Search
-            tokenized_query = " ".join(jieba.cut(cleaned_query))
-            query_obj = SearchQuery(tokenized_query, config='simple')
-            
-            example_word_ids = list(
-                ZhExample.objects.filter(
-                    search_vector=query_obj
-                ).values_list('word_id', flat=True).distinct()
-            )
-            if example_word_ids:
-                filter_q |= Q(id__in=example_word_ids)
+            # Tokenize query for FTS Search (skip for ≤ 2 chars — common chars like 是/的 match nearly all examples)
+            if len(cleaned_query) > 2:
+                tokenized_query = " ".join(jieba.cut(cleaned_query))
+                query_obj = SearchQuery(tokenized_query, config='simple')
+                
+                example_word_ids = list(
+                    ZhExample.objects.filter(
+                        search_vector=query_obj
+                    ).values_list('word_id', flat=True).distinct()
+                )
+                if example_word_ids:
+                    filter_q |= Q(id__in=example_word_ids)
 
             # Generate substrings of query for fast word_idx match
             # substrings = []
@@ -199,9 +200,12 @@ class ZhWordSearchView(generics.ListAPIView):
             #     filter_q |= Q(word__in=substrings)
                 
             queryset = queryset.filter(filter_q)
-            has_example_match = Exists(
-                ZhExample.objects.filter(word_id=OuterRef('pk'), search_vector=query_obj)
-            )
+            if len(cleaned_query) > 2:
+                has_example_match = Exists(
+                    ZhExample.objects.filter(word_id=OuterRef('pk'), search_vector=query_obj)
+                )
+            else:
+                has_example_match = Value(False)
             
             # Match levels for Chinese: 1, 3, 7, 8
             queryset = queryset.annotate(
