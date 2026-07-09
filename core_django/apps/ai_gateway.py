@@ -282,8 +282,6 @@ class AIFallbackGateway:
         if user_tier.lower() in ['guest', 'free']:
             engine = 'google'
 
-        print(f"DEBUG: user_tier={user_tier}, requested_engine={request.data.get('engine')}, resolved_engine={engine}")
-
         hashed_text = hashlib.md5(text_input.encode('utf-8')).hexdigest()
         ai_cache_key = f"{cache_key_prefix}:{direction}:{hashed_text}"
         cached_data = cache.get(ai_cache_key)
