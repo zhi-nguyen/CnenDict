@@ -61,36 +61,47 @@ class AIFallbackGateway:
     @staticmethod
     def get_translation_char_limit(user, mode='zh'):
         """
-        Lấy hạn mức ký tự (zh) hoặc số từ (en) dựa theo gói tài khoản.
+        Lấy hạn mức ký tự dịch thuật dựa theo gói tài khoản.
+        - zh: đếm ký tự tiếng Trung (ngắn hơn)
+        - en: đếm ký tự tiếng Anh/Việt (dài hơn)
         """
         if not user or not user.is_authenticated:
-            return 150 if mode == 'zh' else 50 # Guest: 150 kí tự (zh) hoặc 50 từ (en)
-        try:
-            tier = user.subscription.tier if hasattr(user, 'subscription') else 'Free'
-        except Exception:
-            tier = 'Free'
+            tier = 'Guest'
+        else:
+            try:
+                tier = user.subscription.tier if hasattr(user, 'subscription') else 'Free'
+            except Exception:
+                tier = 'Free'
             
-        tier = tier.lower()
-        if tier == 'plus':
-            return 1000 if mode == 'zh' else 350
-        elif tier == 'pro':
-            return 2000 if mode == 'zh' else 700
-        elif tier == 'premium':
-            return 3000 if mode == 'zh' else 1000
+        # Truy vấn cấu hình từ DB
+        from apps.subscriptions.models import VolumeLimitConfig
+        try:
+            config = VolumeLimitConfig.objects.filter(tier__iexact=tier).first()
+            if config:
+                return config.translation_zh_limit if mode == 'zh' else config.translation_en_limit
+        except Exception:
+            pass
+
+        # Fallback values if DB lookup fails
+        tier_lower = tier.lower()
+        if tier_lower == 'guest':
+            return 150 if mode == 'zh' else 300
+        elif tier_lower == 'plus':
+            return 1000 if mode == 'zh' else 2000
+        elif tier_lower == 'pro':
+            return 2000 if mode == 'zh' else 4000
+        elif tier_lower == 'premium':
+            return 3000 if mode == 'zh' else 6000
         else: # Free
-            return 500 if mode == 'zh' else 180
+            return 500 if mode == 'zh' else 1000
 
     @staticmethod
     def count_words(text, mode='zh'):
         """
-        Cơ chế đếm linh hoạt:
-        - zh: đếm ký tự (characters)
-        - en: đếm từ độc lập (.split())
+        Đếm số ký tự của văn bản (đã chuyển sang dùng đếm ký tự cho mọi ngôn ngữ).
         """
         if not text:
             return 0
-        if mode == 'en':
-            return len(text.split())
         return len(text)
 
     @classmethod
@@ -109,8 +120,19 @@ class AIFallbackGateway:
         db_hit = db_lookup_func()
 
         if query and not db_hit:
+            # 1. Xác định hướng dịch thuật (direction)
+            if mode == 'en':
+                direction = 'vi_en'
+            else: # mode == 'zh'
+                import re
+                has_latin = bool(re.search(r'[a-zA-Z]', query))
+                has_chinese = bool(re.search(r'[\u4e00-\u9fff]', query))
+                if has_chinese and not has_latin:
+                    direction = 'zh_vi'
+                else:
+                    direction = 'vi_zh'
+
             # Tra cứu bộ nhớ đệm AI (Redis Cache)
-            direction = "zh_vi" if mode == 'zh' else "en_vi"
             import hashlib
             hashed_query = hashlib.md5(query.encode('utf-8')).hexdigest()
             ai_cache_key = f"{cache_key_prefix}:{direction}:{hashed_query}"
@@ -126,18 +148,19 @@ class AIFallbackGateway:
             user = request.user
             if not user or not user.is_authenticated:
                 ai_limit = 15  # Guest: 15 lần/phút
+                user_tier = 'Guest'
             else:
                 try:
-                    tier = user.subscription.tier if hasattr(user, 'subscription') else 'Free'
+                    user_tier = user.subscription.tier if hasattr(user, 'subscription') else 'Free'
                 except Exception:
-                    tier = 'Free'
+                    user_tier = 'Free'
                 
-                tier = tier.lower()
-                if tier == 'plus':
+                tier_lower = user_tier.lower()
+                if tier_lower == 'plus':
                     ai_limit = 60   # Plus: 60 lần/phút
-                elif tier == 'pro':
+                elif tier_lower == 'pro':
                     ai_limit = 100  # Pro: 100 lần/phút
-                elif tier == 'premium':
+                elif tier_lower == 'premium':
                     ai_limit = 120  # Premium: 120 lần/phút
                 else:
                     ai_limit = 30   # Free: 30 lần/phút
@@ -160,8 +183,25 @@ class AIFallbackGateway:
                     status=status.HTTP_429_TOO_MANY_REQUESTS
                 )
 
-            # Kích hoạt Celery Task dịch thuật
-            user = request.user
+            # Chặn user Guest/Free dùng AI Fallback Celery task, chuyển hướng sang Google Translate v3 đồng bộ
+            if user_tier.lower() in ['guest', 'free']:
+                try:
+                    translated_text = cls.call_gcp_translation_v3(query, direction)
+                    result = {
+                        'translatedText': translated_text,
+                        'source': 'google_translate',
+                        'status': 'SUCCESS'
+                    }
+                    # Cache kết quả Google Translate trong 3 ngày
+                    cache.set(ai_cache_key, {"status": "success", "result": result}, timeout=3 * 24 * 60 * 60)
+                    return Response(result, status=status.HTTP_200_OK)
+                except Exception as e:
+                    logger.error(f"Google Cloud Translation v3 failed in search fallback: {e}")
+                    return Response({
+                        "error": f"Dịch vụ Google Cloud Translation tạm thời gặp sự cố: {str(e)}"
+                    }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            # Kích hoạt Celery Task dịch thuật (chỉ dành cho VIPs)
             guest_id = request.data.get("guest_id") or request.query_params.get("guest_id")
             effective_user_id = str(user.id) if user.is_authenticated else guest_id
 
@@ -171,14 +211,9 @@ class AIFallbackGateway:
                     "WebSocket notification will NOT be sent."
                 )
 
-            # Determine user tier for SLA routing
-            if user and user.is_authenticated:
-                user_tier = getattr(user.subscription, 'tier', 'Free') if hasattr(user, 'subscription') else 'Free'
-            else:
-                user_tier = 'Guest'
-
             task_kwargs = {"user_id": effective_user_id} if effective_user_id else {}
             task_kwargs["user_tier"] = user_tier
+            task_kwargs["direction"] = direction
 
             task = task_func.apply_async(
                 args=[query], 

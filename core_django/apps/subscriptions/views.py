@@ -281,6 +281,11 @@ class SubscriptionUsageView(APIView):
         used_hr = int(used_hr_val or 0)
         used_day = int(used_day_val or 0)
 
+        # Get translation limits dynamically
+        from apps.ai_gateway import AIFallbackGateway
+        translation_zh_limit = AIFallbackGateway.get_translation_char_limit(user, mode='zh')
+        translation_en_limit = AIFallbackGateway.get_translation_char_limit(user, mode='en')
+
         return Response({
             'tier': tier,
             'limit_min': limit_min,
@@ -289,5 +294,7 @@ class SubscriptionUsageView(APIView):
             'used_min': used_min,
             'used_hr': used_hr,
             'used_day': used_day,
+            'translation_zh_limit': translation_zh_limit,
+            'translation_en_limit': translation_en_limit,
             'service_available': is_service_available()
         }, status=status.HTTP_200_OK)

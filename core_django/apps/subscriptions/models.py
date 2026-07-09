@@ -161,9 +161,11 @@ class VolumeLimitConfig(models.Model):
     mb_per_day = models.PositiveIntegerField(default=100)
     pdf_daily_limit = models.PositiveIntegerField(default=2, help_text="Số lần xuất PDF tối đa mỗi ngày")
     pdf_word_limit = models.PositiveIntegerField(default=10, help_text="Số từ vựng tối đa mỗi file PDF")
+    translation_zh_limit = models.PositiveIntegerField(default=150, help_text="Hạn mức ký tự dịch thuật Tiếng Trung")
+    translation_en_limit = models.PositiveIntegerField(default=300, help_text="Hạn mức ký tự dịch thuật Tiếng Anh/Việt")
 
     def __str__(self):
-        return f"Config {self.tier}: {self.mb_per_minute}MB/m, {self.mb_per_hour}MB/h, {self.mb_per_day}MB/d, PDF: {self.pdf_daily_limit} times/day, {self.pdf_word_limit} words/file"
+        return f"Config {self.tier}: {self.mb_per_minute}MB/m, {self.mb_per_hour}MB/h, {self.mb_per_day}MB/d, PDF: {self.pdf_daily_limit} times/day, {self.pdf_word_limit} words/file, Trans: {self.translation_zh_limit}zh/{self.translation_en_limit}en"
 
 
 class PaymentOrder(models.Model):
