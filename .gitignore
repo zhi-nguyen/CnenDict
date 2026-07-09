@@ -123,3 +123,4 @@ core_django/celerybeat-schedule
 # ── Temporary import data ──
 core_django/import_data/
 import_data.zip
+nginx.crt
