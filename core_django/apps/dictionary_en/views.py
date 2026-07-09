@@ -46,10 +46,10 @@ class EnWordSearchView(generics.ListAPIView):
                     
                     # Word boundary match for single-word English queries
                     if not match and cleaned_for_search and query_word_len == 1:
-                        word_boundary_pattern = r'\y' + re.escape(cleaned_for_search) + r'\y'
+                        query_obj = SearchQuery(cleaned_for_search, config='english')
                         matches = list(
                             EnExample.objects
-                            .filter(english__iregex=word_boundary_pattern)
+                            .filter(search_vector=query_obj)
                             .order_by(Length('english'))[:1]
                         )
                         match = matches[0] if matches else None
