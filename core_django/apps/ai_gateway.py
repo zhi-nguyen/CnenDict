@@ -17,6 +17,48 @@ class AIFallbackGateway:
         return request.META.get('REMOTE_ADDR', 'anonymous')
 
     @staticmethod
+    def call_gcp_translation_v3(text, direction):
+        import google.auth
+        from google.auth.transport.requests import Request as AuthRequest
+        import requests
+        import os
+
+        # Map direction to Google Cloud Translation source and target codes
+        if direction == 'zh_vi':
+            sl, tl = 'zh', 'vi'
+        elif direction == 'vi_zh':
+            sl, tl = 'vi', 'zh'
+        elif direction == 'en_vi':
+            sl, tl = 'en', 'vi'
+        elif direction == 'vi_en':
+            sl, tl = 'vi', 'en'
+        else:
+            sl, tl = 'auto', 'vi'
+
+        project_id = os.environ.get("GOOGLE_CLOUD_PROJECT", "project-99192cc3-792c-4507-b70")
+        
+        credentials, _ = google.auth.default(scopes=['https://www.googleapis.com/auth/cloud-platform'])
+        auth_req = AuthRequest()
+        credentials.refresh(auth_req)
+
+        url = f"https://translate.googleapis.com/v3/projects/{project_id}/locations/global:translateText"
+        headers = {
+            "Authorization": f"Bearer {credentials.token}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "contents": [text],
+            "targetLanguageCode": tl,
+            "sourceLanguageCode": sl,
+            "mimeType": "text/plain"
+        }
+        response = requests.post(url, json=payload, headers=headers, timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        translated_text = "".join([t["translatedText"] for t in data.get("translations", [])])
+        return translated_text
+
+    @staticmethod
     def get_translation_char_limit(user, mode='zh'):
         """
         Lấy hạn mức ký tự (zh) hoặc số từ (en) dựa theo gói tài khoản.
@@ -227,17 +269,52 @@ class AIFallbackGateway:
                             'status': 'SUCCESS'
                         }, status=status.HTTP_200_OK)
 
+        # Determine user tier for SLA routing
+        user = request.user
+        if user and user.is_authenticated:
+            user_tier = getattr(user.subscription, 'tier', 'Free') if hasattr(user, 'subscription') else 'Free'
+        else:
+            user_tier = 'Guest'
+
+        # Get translation engine option (default is AI)
+        engine = request.data.get("engine", "ai")
+        # Enforce google engine for Guest and Free users
+        if user_tier.lower() in ['guest', 'free']:
+            engine = 'google'
+
         hashed_text = hashlib.md5(text_input.encode('utf-8')).hexdigest()
         ai_cache_key = f"{cache_key_prefix}:{direction}:{hashed_text}"
         cached_data = cache.get(ai_cache_key)
 
         if cached_data:
-            if cached_data.get('status') == 'success':
-                return Response(cached_data['result'])
-            if cached_data.get('status') == 'processing':
-                return Response({"status": "PENDING", "task_id": cached_data['task_id']}, status=status.HTTP_202_ACCEPTED)
+            # Overwrite cache bypass: if engine is explicitly 'ai' but cache was Google Translate, we bypass the cache hit
+            if engine == 'ai' and cached_data.get('result', {}).get('source') == 'google_translate':
+                pass
+            else:
+                if cached_data.get('status') == 'success':
+                    return Response(cached_data['result'])
+                if cached_data.get('status') == 'processing':
+                    return Response({"status": "PENDING", "task_id": cached_data['task_id']}, status=status.HTTP_202_ACCEPTED)
 
-        user = request.user
+        # Handle Google Cloud Translation v3 synchronously and cache it
+        if engine == 'google':
+            try:
+                translated_text = cls.call_gcp_translation_v3(text_input, direction)
+                result = {
+                    'translatedText': translated_text,
+                    'source': 'google_translate',
+                    'status': 'SUCCESS'
+                }
+                # Cache the Google Translate result for 3 days
+                cache.set(ai_cache_key, {"status": "success", "result": result}, timeout=3 * 24 * 60 * 60)
+                return Response(result, status=status.HTTP_200_OK)
+            except Exception as e:
+                logger.error(f"Google Cloud Translation v3 failed: {e}")
+                return Response({
+                    "error": f"Dịch vụ Google Cloud Translation tạm thời gặp sự cố: {str(e)}"
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        # Trigger Gemini AI Celery Task for VIPs
         guest_id = request.data.get("guest_id") or request.query_params.get("guest_id")
         effective_user_id = str(user.id) if user.is_authenticated else guest_id
 
@@ -246,12 +323,6 @@ class AIFallbackGateway:
                 f"⚠️ No user_id or guest_id found for AI translation fallback task (input: {text_input[:20]}...). "
                 "WebSocket notification will NOT be sent."
             )
-
-        # Determine user tier for SLA routing
-        if user and user.is_authenticated:
-            user_tier = getattr(user.subscription, 'tier', 'Free') if hasattr(user, 'subscription') else 'Free'
-        else:
-            user_tier = 'Guest'
 
         task_kwargs = {
             "user_id": effective_user_id,
