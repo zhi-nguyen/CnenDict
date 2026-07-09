@@ -197,6 +197,19 @@ class AIFallbackGateway:
         """
         Logic điều phối phòng thủ chung cho API Dịch thuật.
         """
+        # Safeguard: Check Content-Length to prevent memory exhaustion (413 Payload Too Large)
+        content_length = request.META.get('CONTENT_LENGTH')
+        if content_length:
+            try:
+                # 150KB limit is extremely generous for normal translation texts (approx. 50k characters)
+                if int(content_length) > 150 * 1024:
+                    return Response({
+                        "error": "Request Entity Too Large",
+                        "detail": "Văn bản gửi lên vượt quá giới hạn dung lượng cho phép (tối đa 150KB)."
+                    }, status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
+            except ValueError:
+                pass
+
         text_input = request.data.get("text", "").strip()
         if not text_input:
             return Response({'error': 'No text provided'}, status=status.HTTP_400_BAD_REQUEST)
@@ -295,6 +308,34 @@ class AIFallbackGateway:
                     return Response(cached_data['result'])
                 if cached_data.get('status') == 'processing':
                     return Response({"status": "PENDING", "task_id": cached_data['task_id']}, status=status.HTTP_202_ACCEPTED)
+
+        # ── Tầng 2: Kiểm soát Tốc độ gọi dịch thuật thực tế (Rate Limit) ──
+        if user_tier.lower() == 'guest':
+            trans_limit = 10  # Guest: 10 lần/phút
+        elif user_tier.lower() == 'free':
+            trans_limit = 20  # Free: 20 lần/phút
+        elif user_tier.lower() == 'plus':
+            trans_limit = 45  # Plus: 45 lần/phút
+        else:
+            trans_limit = 90  # Pro, Premium: 90 lần/phút
+
+        ident = f"user_{user.id}" if user and user.is_authenticated else f"ip_{cls.get_client_ip(request)}"
+        trans_throttle_key = f"throttle:trans_fallback:{ident}"
+        
+        try:
+            redis_client = cache.client.get_client()
+            current_trans_requests = redis_client.incr(trans_throttle_key)
+            if current_trans_requests == 1:
+                redis_client.expire(trans_throttle_key, 60)
+        except Exception:
+            current_trans_requests = cache.get(trans_throttle_key, 0) + 1
+            cache.set(trans_throttle_key, current_trans_requests, timeout=60)
+
+        if current_trans_requests > trans_limit:
+            return Response(
+                {"detail": f"Bạn đã vượt quá giới hạn dịch thuật ({trans_limit} lần/phút). Vui lòng thử lại sau ít phút."}, 
+                status=status.HTTP_429_TOO_MANY_REQUESTS
+            )
 
         # Handle Google Cloud Translation v3 synchronously and cache it
         if engine == 'google':
