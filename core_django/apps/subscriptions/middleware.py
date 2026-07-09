@@ -111,7 +111,15 @@ class VolumeLimitMiddleware(MiddlewareMixin):
                 guest_id = request.headers.get('X-Guest-ID')
                 if not guest_id:
                     guest_id = request.POST.get('guest_id')
-                identifier = guest_id if guest_id else request.META.get('REMOTE_ADDR', 'anonymous')
+                
+                # Trích xuất IP thật từ X-Forwarded-For nếu đi qua Reverse Proxy (Nginx)
+                x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+                if x_forwarded_for:
+                    ip = x_forwarded_for.split(',')[0].strip()
+                else:
+                    ip = request.META.get('REMOTE_ADDR', 'anonymous')
+
+                identifier = guest_id if guest_id else ip
                 user_id = f"guest:{identifier}"
                 tier = 'GUEST'
 

@@ -1,8 +1,10 @@
 import uuid
 from django.db import models
-from django.contrib.postgres.indexes import GinIndex
+from django.contrib.postgres.indexes import GinIndex, OpClass
 from django.contrib.postgres.search import SearchVectorField, SearchVector
 from django.db.models import Value
+
+from django.db.models.functions import Lower
 
 class EnWord(models.Model):
     id = models.UUIDField(primary_key=True, editable=False)
@@ -23,6 +25,21 @@ class EnWord(models.Model):
     image_caption = models.TextField(blank=True) # Mô tả hình ảnh tiếng Anh làm Prompt
     audio_url = models.URLField(max_length=500, blank=True)
     image_url = models.URLField(max_length=500, blank=True)
+
+    class Meta:
+        indexes = [
+            # B-tree index on lower(word) for exact and prefix matches
+            models.Index(
+                Lower('word'),
+                name='en_word_lower_btree_idx',
+            ),
+            # GIN trigram index on translation_vi for icontains searches
+            GinIndex(
+                fields=['translation_vi'],
+                name='enword_trans_vi_gin',
+                opclasses=['gin_trgm_ops'],
+            ),
+        ]
 
     def save(self, *args, **kwargs):
         if not self.id and self.word:

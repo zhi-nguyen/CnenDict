@@ -199,10 +199,11 @@ REST_FRAMEWORK = {
         'rest_framework.throttling.UserRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'anon': '20/minute',
+        'anon': '30/minute',
         'user': '60/minute',
         'exam_fetch': '10/minute',
     },
+    'NUM_PROXIES': 1,
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'core_project.authentication.CookieJWTAuthentication',
     ),
