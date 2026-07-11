@@ -6,6 +6,7 @@ requests
 django-cors-headers
 gunicorn
 psycopg2-binary
+pgvector
 dj-database-url
 pyspellchecker
 google-generativeai 

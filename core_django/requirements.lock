@@ -18,6 +18,7 @@ redis==8.0.1
 
 # ── Database ──
 psycopg2-binary==2.9.12
+pgvector==0.3.6
 
 # ── HTTP / Networking ──
 requests==2.34.2

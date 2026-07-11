@@ -31,6 +31,8 @@ services:
         condition: service_started
       ws-gateway:
         condition: service_started
+      ai-chat-service:
+        condition: service_started
     restart: unless-stopped
     networks:
       - xiaoyue-network
@@ -278,6 +280,24 @@ services:
     environment:
       - GOOGLE_APPLICATION_CREDENTIALS=/app/key.json
       - GS_BUCKET_NAME=${GS_BUCKET_NAME:-cnen-bucket}
+    restart: unless-stopped
+    networks:
+      - xiaoyue-network
+
+  # ── AI Chat Service ──
+  ai-chat-service:
+    build:
+      context: ./ai_chat_service
+    volumes:
+      - /opt/xiaoyue/secure/key.json:/app/key.json:ro
+    environment:
+      - REDIS_URL=${REDIS_URL:-redis://:xiaoyue_redis_secret@redis:6379/0}
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/key.json
+      - GEMINI_MODEL_NAME=gemini-2.5-flash
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+    depends_on:
+      redis:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - xiaoyue-network

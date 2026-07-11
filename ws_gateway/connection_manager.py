@@ -70,6 +70,22 @@ class ConnectionManager:
         for dead in dead_connections:
             self.disconnect(user_id, dead)
 
+    async def send_binary_message(self, data: bytes, user_id: str):
+        """Send binary data (e.g., audio chunks) to ALL active connections of a user."""
+        if user_id not in self.active_connections:
+            return
+
+        dead_connections = []
+        for connection in self.active_connections[user_id]:
+            try:
+                await connection.send_bytes(data)
+            except Exception:
+                dead_connections.append(connection)
+
+        # Cleanup ghost connections
+        for dead in dead_connections:
+            self.disconnect(user_id, dead)
+
     async def broadcast(self, message: dict):
         """Send a JSON message to ALL connected users."""
         for user_id in list(self.active_connections.keys()):
