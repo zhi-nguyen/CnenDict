@@ -6,7 +6,7 @@ from .models import UserSubscription
 @receiver(post_save, sender=settings.AUTH_USER_MODEL)
 def create_user_subscription(sender, instance, created, **kwargs):
     if created:
-        UserSubscription.objects.create(user=instance, tier='Free')
+        UserSubscription.objects.get_or_create(user=instance, defaults={'tier': 'Free'})
 
 from django.db.models.signals import pre_save
 from .models import SubscriptionHistory
