@@ -295,6 +295,8 @@ services:
       - GOOGLE_APPLICATION_CREDENTIALS=/app/key.json
       - GEMINI_MODEL_NAME=gemini-2.5-flash
       - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+    env_file:
+      - .env
     depends_on:
       redis:
         condition: service_healthy
