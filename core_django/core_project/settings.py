@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     'apps.notifications',
     'apps.media',
     'apps.reports',
+    'apps.xiaoyue_chat',
     'rest_framework_simplejwt',
 ]
 
@@ -161,7 +162,7 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'Asia/Ho_Chi_Minh'
 CELERY_TASK_DEFAULT_QUEUE = 'queue_core'
-CELERY_TASK_ROUTERS = (
+CELERY_TASK_ROUTES = (
     'core_project.routers.UserTierRouter',
 )
 
@@ -199,10 +200,11 @@ REST_FRAMEWORK = {
         'rest_framework.throttling.UserRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'anon': '20/minute',
+        'anon': '30/minute',
         'user': '60/minute',
         'exam_fetch': '10/minute',
     },
+    'NUM_PROXIES': 1,
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'core_project.authentication.CookieJWTAuthentication',
     ),
@@ -216,6 +218,7 @@ SIMPLE_JWT = {
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
     'AUTH_HEADER_TYPES': ('Bearer',),
+    'SIGNING_KEY': JWT_SECRET_KEY,
     
     # Cookie configurations
     'AUTH_COOKIE': 'access_token',
@@ -239,3 +242,11 @@ SEPAY_ACCOUNT_NUMBER = os.environ.get('SEPAY_ACCOUNT_NUMBER', '')
 SEPAY_ACCOUNT_NAME = os.environ.get('SEPAY_ACCOUNT_NAME', '')
 SEPAY_ORDER_PREFIX = os.environ.get('SEPAY_ORDER_PREFIX', 'CNEN')
 SEPAY_PAYMENT_TIMEOUT_MINUTES = int(os.environ.get('SEPAY_PAYMENT_TIMEOUT_MINUTES', '15'))
+
+# ── Memory System Configuration ──
+GEMINI_MODEL_NAME = os.environ.get('GEMINI_MODEL_NAME', 'gemini-2.5-flash')
+GEMINI_EMBEDDING_MODEL = os.environ.get('GEMINI_EMBEDDING_MODEL', 'text-embedding-004')
+EMBEDDING_DIMENSIONS = 768  # text-embedding-004 output dimensions
+CHAT_SUMMARY_CYCLE = int(os.environ.get('CHAT_SUMMARY_CYCLE', '6'))
+CHAT_RAG_THRESHOLD = int(os.environ.get('CHAT_RAG_THRESHOLD', '10'))
+CHAT_RAG_TOP_K = int(os.environ.get('CHAT_RAG_TOP_K', '3'))

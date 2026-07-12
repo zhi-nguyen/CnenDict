@@ -19,43 +19,23 @@ def process_expired_subscriptions():
     expired_subs = UserSubscription.objects.exclude(tier='Premium').filter(end_date__lt=now)
     count = 0
 
-    for sub in expired_subs:
+    for sub in expired_subs.iterator(chunk_size=500):
         with transaction.atomic():
             # Khóa PostgreSQL row
-            locked_sub = UserSubscription.objects.select_for_update().get(pk=sub.pk)
+            try:
+                locked_sub = UserSubscription.objects.select_for_update().get(pk=sub.pk)
+            except UserSubscription.DoesNotExist:
+                continue
 
             if locked_sub.tier != 'Premium' and locked_sub.end_date and locked_sub.end_date < now:
                 old_tier = locked_sub.tier
-                if locked_sub.pending_downgrade_tier:
-                    new_tier = locked_sub.pending_downgrade_tier
-                    locked_sub.pending_downgrade_tier = None
-
-                    if new_tier == 'Free':
-                        locked_sub.tier = 'Free'
-                        locked_sub.is_active = False
-                        locked_sub.end_date = None
-                        locked_sub.price = 0
-                        locked_sub.vat = 0
-                    else:
-                        locked_sub.tier = new_tier
-                        locked_sub.is_active = True
-                        try:
-                            plan = SubscriptionPlan.objects.get(tier=new_tier)
-                            locked_sub.price = plan.price
-                            locked_sub.vat = plan.vat
-                        except SubscriptionPlan.DoesNotExist:
-                            pass
-                        # Reset chu kỳ 30 ngày kể từ lúc hết hạn cũ hoặc thời điểm hiện tại
-                        locked_sub.end_date = now + timezone.timedelta(days=30)
-                    
-                    logger.info(f"Auto processed scheduled downgrade for user {locked_sub.user.username}: {old_tier} -> {new_tier}")
-                else:
-                    locked_sub.tier = 'Free'
-                    locked_sub.is_active = False
-                    locked_sub.end_date = None
-                    locked_sub.price = 0
-                    locked_sub.vat = 0
-                    logger.info(f"Subscription expired and downgraded to Free for user {locked_sub.user.username}: {old_tier} -> Free")
+                locked_sub.tier = 'Free'
+                locked_sub.is_active = False
+                locked_sub.end_date = None
+                locked_sub.price = 0
+                locked_sub.vat = 0
+                locked_sub.pending_downgrade_tier = None
+                logger.info(f"Subscription expired and downgraded to Free for user {locked_sub.user.username}: {old_tier} -> Free")
 
                 locked_sub.save()
                 count += 1
@@ -98,3 +78,32 @@ def notify_payment_success_task(user_id, order_id, target_tier):
         },
         persist=True
     )
+
+
+@shared_task(bind=True, max_retries=5, default_retry_delay=3)
+def send_welcome_pro_gift_notification(self, user_id):
+    """
+    Gửi thông báo chào mừng dùng thử gói Pro 3 ngày cho user mới (chạy ngầm).
+    """
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+    try:
+        # Check if user exists to handle replication lag / DB delay
+        if not User.objects.filter(id=user_id).exists():
+            raise User.DoesNotExist(f"User with ID {user_id} not found in database yet.")
+        
+        from core_project.ws_utils import ws_notify
+        ws_notify(
+            user_id=user_id,
+            event_type="subscription_change",
+            title="Cảm ơn bạn đã đăng ký sử dụng, chúng tôi xin gửi tặng bạn 3 ngày trải nghiệm miễn phí các tính năng trả phí của hệ thống",
+            payload={
+                "tier": "Pro",
+                "days": 3
+            },
+            persist=True
+        )
+        logger.info(f"Successfully sent welcome pro gift notification to user {user_id}")
+    except Exception as exc:
+        logger.warning(f"Failed to send welcome pro gift notification for user {user_id}: {exc}. Retrying...")
+        raise self.retry(exc=exc)

@@ -1,0 +1,39 @@
+# ══════════════════════════════════════════════════════════════
+# XiaoYueDict Core Django — Pinned Dependencies
+# Generated from pip freeze on production Docker image
+# Use this file in Dockerfile for reproducible builds
+# ══════════════════════════════════════════════════════════════
+
+# ── Core Framework ──
+Django==5.2.15
+djangorestframework==3.17.1
+djangorestframework_simplejwt==5.5.1
+django-cors-headers==4.9.0
+dj-database-url==3.1.2
+gunicorn==26.0.0
+
+# ── Task Queue ──
+celery==5.6.3
+redis==8.0.1
+
+# ── Database ──
+psycopg2-binary==2.9.12
+pgvector==0.3.6
+
+# ── HTTP / Networking ──
+requests==2.34.2
+
+# ── AI / Google Cloud ──
+google-generativeai==0.8.6
+google-genai==2.10.0
+google-cloud-aiplatform==1.158.0
+google-cloud-storage==3.12.0
+
+# ── Authentication ──
+firebase_admin==7.4.0
+PyJWT==2.13.0
+
+# ── NLP / Utilities ──
+pyspellchecker==0.9.0
+jieba==0.42.1
+Pillow==12.2.0

@@ -67,29 +67,12 @@ class UserSubscription(models.Model):
                 # Thực hiện khóa hàng PostgreSQL bằng QuerySet thông qua select_for_update()
                 locked_sub = UserSubscription.objects.select_for_update().get(pk=self.pk)
                 if locked_sub.tier != 'Free' and locked_sub.tier != 'Premium' and locked_sub.end_date and locked_sub.end_date < timezone.now():
-                    if locked_sub.pending_downgrade_tier:
-                        new_tier = locked_sub.pending_downgrade_tier
-                        locked_sub.pending_downgrade_tier = None
-                        if new_tier == 'Free':
-                            locked_sub.tier = 'Free'
-                            locked_sub.is_active = False
-                            locked_sub.end_date = None
-                        else:
-                            # Mock payment success for auto-renew to the scheduled tier
-                            locked_sub.tier = new_tier
-                            locked_sub.is_active = True
-                            # Set price & vat based on the new plan
-                            try:
-                                plan = SubscriptionPlan.objects.get(tier=new_tier)
-                                locked_sub.price = plan.price
-                                locked_sub.vat = plan.vat
-                            except SubscriptionPlan.DoesNotExist:
-                                pass
-                            locked_sub.end_date = locked_sub.end_date + timezone.timedelta(days=30)
-                    else:
-                        locked_sub.tier = 'Free'
-                        locked_sub.is_active = False
-                        locked_sub.end_date = None
+                    locked_sub.tier = 'Free'
+                    locked_sub.is_active = False
+                    locked_sub.end_date = None
+                    locked_sub.price = 0
+                    locked_sub.vat = 0
+                    locked_sub.pending_downgrade_tier = None
 
                     locked_sub.save()
                     
@@ -161,9 +144,11 @@ class VolumeLimitConfig(models.Model):
     mb_per_day = models.PositiveIntegerField(default=100)
     pdf_daily_limit = models.PositiveIntegerField(default=2, help_text="Số lần xuất PDF tối đa mỗi ngày")
     pdf_word_limit = models.PositiveIntegerField(default=10, help_text="Số từ vựng tối đa mỗi file PDF")
+    translation_zh_limit = models.PositiveIntegerField(default=150, help_text="Hạn mức ký tự dịch thuật Tiếng Trung")
+    translation_en_limit = models.PositiveIntegerField(default=300, help_text="Hạn mức ký tự dịch thuật Tiếng Anh/Việt")
 
     def __str__(self):
-        return f"Config {self.tier}: {self.mb_per_minute}MB/m, {self.mb_per_hour}MB/h, {self.mb_per_day}MB/d, PDF: {self.pdf_daily_limit} times/day, {self.pdf_word_limit} words/file"
+        return f"Config {self.tier}: {self.mb_per_minute}MB/m, {self.mb_per_hour}MB/h, {self.mb_per_day}MB/d, PDF: {self.pdf_daily_limit} times/day, {self.pdf_word_limit} words/file, Trans: {self.translation_zh_limit}zh/{self.translation_en_limit}en"
 
 
 class PaymentOrder(models.Model):

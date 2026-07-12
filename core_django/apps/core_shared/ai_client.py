@@ -46,15 +46,20 @@ def get_genai_client():
         try:
             from google import genai
 
+            project = os.environ.get("GOOGLE_CLOUD_PROJECT", "project-99192cc3-792c-4507-b70")
+            location = os.environ.get("GOOGLE_CLOUD_LOCATION", "asia-southeast1")
+
             _genai_client = genai.Client(
                 vertexai=True,
+                project=project,
+                location=location,
                 http_options={
                     'headers': {
                         'X-Vertex-AI-LLM-Shared-Request-Type': 'priority'
                     }
                 }
             )
-            logger.info("✅ Vertex AI genai Client singleton initialized successfully.")
+            logger.info(f"✅ Vertex AI genai Client initialized: project={project}, location={location}")
         except Exception as e:
             logger.error(f"❌ Failed to initialize Vertex AI genai Client: {e}")
             raise

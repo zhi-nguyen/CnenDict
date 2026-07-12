@@ -233,9 +233,13 @@ class FirebaseLoginView(APIView):
             uid = decoded_token.get('uid')
             email = decoded_token.get('email')
             name = decoded_token.get('name', '') or ''
+            email_verified = decoded_token.get('email_verified', False)
         except Exception as e:
             logger.error(f"Firebase token verification failed: {e}")
             return Response({"detail": "Token không hợp lệ hoặc đã hết hạn."}, status=401)
+
+        if not email_verified:
+            return Response({"detail": "Email chưa được xác nhận. Vui lòng xác thực email của bạn trước khi đăng nhập."}, status=403)
 
         User = get_user_model()
         user = None
@@ -275,14 +279,19 @@ class FirebaseLoginView(APIView):
                     first_name = name
 
             from django.utils.crypto import get_random_string
-            user = User.objects.create_user(
-                username=username,
-                email=email or '',
-                password=get_random_string(32),
-                first_name=first_name,
-                last_name=last_name,
-                firebase_uid=uid
-            )
+            from django.db import transaction
+            from apps.subscriptions.services import grant_new_user_trial_pro
+
+            with transaction.atomic():
+                user = User.objects.create_user(
+                    username=username,
+                    email=email or '',
+                    password=get_random_string(32),
+                    first_name=first_name,
+                    last_name=last_name,
+                    firebase_uid=uid
+                )
+                grant_new_user_trial_pro(user)
 
         # Update first_name and last_name if empty and name is available
         if name and not user.first_name and not user.last_name:

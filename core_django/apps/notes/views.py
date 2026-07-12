@@ -821,6 +821,16 @@ class CloneSystemNotebookView(APIView):
         if not key:
             return Response({"detail": "system_notebook_key is required."}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Enforce premium check for non-HSK / non-CEFR notebooks
+        if not key.startswith('hsk_') and not key.startswith('cefr_'):
+            from apps.subscriptions.permissions import IsPremiumUser
+            perm = IsPremiumUser()
+            if not perm.has_permission(request, self):
+                return Response(
+                    {"detail": "Tính năng sao chép sổ tay Từ loại / Chủ đề yêu cầu tài khoản Premium hoặc Pro."},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
         # Retrieve system words
         if key.startswith('cefr_') or (key.startswith('pos_') and lang == 'en'):
             queryset = EnWord.objects.all()

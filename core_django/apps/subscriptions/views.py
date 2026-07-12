@@ -43,10 +43,10 @@ class SubscriptionPlanListView(generics.ListAPIView):
 
 class SubscriptionRegisterView(APIView):
     """
-    Nâng cấp / Hạ cấp gói subscription.
+    Nâng cấp gói subscription.
 
     - Nâng cấp: Tạo PaymentOrder (PENDING) + trả QR data cho client.
-    - Hạ cấp: Deferred downgrade (giữ quyền lợi đến hết kỳ) hoặc tức thì nếu là Premium.
+    - Hạ cấp: Trả về lỗi 400 Bad Request.
     """
     permission_classes = [IsAuthenticated]
 
@@ -79,14 +79,11 @@ class SubscriptionRegisterView(APIView):
                 result = manager.initiate_upgrade(user, target_tier)
                 return Response(result, status=status.HTTP_200_OK)
             else:
-                # Hạ cấp
-                result = manager.request_downgrade(user, target_tier)
-                sub_serializer = UserSubscriptionSerializer(user.subscription)
-                return Response({
-                    'status': result['status'],
-                    'message': 'Yêu cầu xử lý thành công.',
-                    'subscription': sub_serializer.data
-                }, status=status.HTTP_200_OK)
+                # Hạ cấp không được hỗ trợ
+                return Response(
+                    {'error': 'Không hỗ trợ hạ cấp gói dịch vụ.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
         except ValueError as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
@@ -96,31 +93,6 @@ class SubscriptionRegisterView(APIView):
             logger.exception("Unexpected error in SubscriptionRegisterView")
             return Response(
                 {'error': 'Có lỗi hệ thống xảy ra. Vui lòng liên hệ hỗ trợ.'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-
-class CancelDowngradeView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request, *args, **kwargs):
-        user = request.user
-        manager = SubscriptionManager()
-
-        try:
-            result = manager.cancel_downgrade(user)
-            sub_serializer = UserSubscriptionSerializer(user.subscription)
-            return Response({
-                'status': result['status'],
-                'message': "Đã hủy yêu cầu hạ cấp thành công.",
-                'subscription': sub_serializer.data
-            }, status=status.HTTP_200_OK)
-        except ValueError as e:
-            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-        except Exception as e:
-            logger.exception("Unexpected error in CancelDowngradeView")
-            return Response(
-                {'error': 'Có lỗi hệ thống xảy ra.'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
@@ -281,6 +253,11 @@ class SubscriptionUsageView(APIView):
         used_hr = int(used_hr_val or 0)
         used_day = int(used_day_val or 0)
 
+        # Get translation limits dynamically
+        from apps.ai_gateway import AIFallbackGateway
+        translation_zh_limit = AIFallbackGateway.get_translation_char_limit(user, mode='zh')
+        translation_en_limit = AIFallbackGateway.get_translation_char_limit(user, mode='en')
+
         return Response({
             'tier': tier,
             'limit_min': limit_min,
@@ -289,5 +266,7 @@ class SubscriptionUsageView(APIView):
             'used_min': used_min,
             'used_hr': used_hr,
             'used_day': used_day,
+            'translation_zh_limit': translation_zh_limit,
+            'translation_en_limit': translation_en_limit,
             'service_available': is_service_available()
         }, status=status.HTTP_200_OK)

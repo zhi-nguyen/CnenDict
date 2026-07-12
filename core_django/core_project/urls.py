@@ -17,6 +17,7 @@ urlpatterns = [
     path('api/v1/notifications/', include('apps.notifications.urls')),
     path('api/v1/media/', include('apps.media.urls')),
     path('api/v1/reports/', include('apps.reports.urls')),
+    path('api/v1/xiaoyue-chat/', include('apps.xiaoyue_chat.urls')),
 ]
 
 if settings.DEBUG:

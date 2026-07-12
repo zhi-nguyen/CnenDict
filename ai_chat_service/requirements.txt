@@ -1,0 +1,7 @@
+fastapi>=0.115.0
+uvicorn[standard]
+redis[hiredis]>=5.0
+google-genai>=1.0
+json-repair>=0.30
+azure-cognitiveservices-speech>=1.40.0
+pydantic-settings>=2.0

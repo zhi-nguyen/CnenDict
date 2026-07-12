@@ -18,7 +18,15 @@ class UserTierRouter:
         if task in system_tasks:
             return {'queue': 'queue_core'}
 
-        # 2. Extract user_tier from kwargs to route dynamically
+        # 2. Chat tasks always route to queue_chat (heavy RAG processing)
+        chat_tasks = {
+            'apps.xiaoyue_chat.tasks.dispatch_chat_request',
+            'apps.xiaoyue_chat.tasks.async_summarize_and_embed',
+        }
+        if task in chat_tasks:
+            return {'queue': 'queue_chat'}
+
+        # 3. Extract user_tier from kwargs to route dynamically
         user_tier = None
         if kwargs and 'user_tier' in kwargs:
             # IMPORTANT: Pop the user_tier keyword argument to prevent unexpected argument error on worker execution

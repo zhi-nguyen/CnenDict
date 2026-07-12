@@ -11,13 +11,18 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         fields = ('id', 'username', 'email', 'password', 'first_name', 'last_name')
 
     def create(self, validated_data):
-        user = User.objects.create_user(
-            username=validated_data['username'],
-            email=validated_data.get('email', ''),
-            password=validated_data['password'],
-            first_name=validated_data.get('first_name', ''),
-            last_name=validated_data.get('last_name', '')
-        )
+        from django.db import transaction
+        from apps.subscriptions.services import grant_new_user_trial_pro
+        
+        with transaction.atomic():
+            user = User.objects.create_user(
+                username=validated_data['username'],
+                email=validated_data.get('email', ''),
+                password=validated_data['password'],
+                first_name=validated_data.get('first_name', ''),
+                last_name=validated_data.get('last_name', '')
+            )
+            grant_new_user_trial_pro(user)
         return user
 
 from io import BytesIO

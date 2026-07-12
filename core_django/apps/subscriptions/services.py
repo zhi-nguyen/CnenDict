@@ -395,90 +395,29 @@ class SubscriptionManager:
             'end_date': locked_sub.end_date
         }
 
-    def request_downgrade(self, user, target_tier: str) -> dict:
-        """
-        Hạ cấp gói:
-        - Nếu gói hiện hành là Premium (Vĩnh viễn): Hạ cấp tức thì (vì không có hạn end_date).
-        - Ngược lại: Thiết lập pending_downgrade_tier (Deferred Downgrade), giữ nguyên quyền lợi đến hết kỳ.
-        """
-        tiers = ['Free', 'Plus', 'Pro', 'Premium']
-        if target_tier not in tiers:
-            raise ValueError(f"Gói '{target_tier}' không hợp lệ.")
 
-        sub = getattr(user, 'subscription', None)
-        if not sub:
-            raise ValueError("Người dùng chưa có gói đăng ký nào.")
 
-        current_idx = tiers.index(sub.tier)
-        target_idx = tiers.index(target_tier)
+def grant_new_user_trial_pro(user):
+    """
+    Kích hoạt gói Pro dùng thử 3 ngày cho người dùng mới và lên lịch gửi thông báo.
+    """
+    from django.utils import timezone
+    from django.db import transaction
+    from .models import UserSubscription
+    from .tasks import send_welcome_pro_gift_notification
+    
+    with transaction.atomic():
+        sub, _ = UserSubscription.objects.get_or_create(user=user)
+        sub.tier = 'Pro'
+        sub.is_active = True
+        sub.start_date = timezone.now()
+        sub.end_date = timezone.now() + timezone.timedelta(days=3)
+        sub.save()
+        
+        # Đồng bộ instance trong memory
+        user.subscription = sub
+        
+        transaction.on_commit(
+            lambda: send_welcome_pro_gift_notification.apply_async(args=[str(user.id)], countdown=10)
+        )
 
-        if target_idx >= current_idx:
-            raise ValueError("Không thể hạ cấp lên gói cao hơn hoặc bằng gói hiện tại.")
-
-        if sub.tier == 'Premium':
-            # Premium hạ cấp -> Thực hiện ngay lập tức
-            try:
-                plan = SubscriptionPlan.objects.get(tier=target_tier)
-            except SubscriptionPlan.DoesNotExist:
-                raise ValueError(f"Gói cấu hình '{target_tier}' không tồn tại.")
-
-            with transaction.atomic():
-                locked_sub = UserSubscription.objects.select_for_update().get(pk=sub.pk)
-                old_tier = locked_sub.tier
-
-                locked_sub.tier = target_tier
-                locked_sub.price = plan.price
-                locked_sub.vat = plan.vat
-                locked_sub.pending_downgrade_tier = None
-                locked_sub.start_date = timezone.now()
-
-                if target_tier == 'Free':
-                    locked_sub.is_active = False
-                    locked_sub.end_date = None
-                else:
-                    locked_sub.is_active = True
-                    locked_sub.end_date = timezone.now() + timezone.timedelta(days=30)
-
-                locked_sub.save()
-
-            user.subscription = locked_sub
-            return {
-                'status': 'downgraded_immediately',
-                'old_tier': old_tier,
-                'new_tier': target_tier,
-                'end_date': locked_sub.end_date
-            }
-        else:
-            # Deferred Downgrade: Giữ quyền lợi gói cũ đến hết kỳ
-            with transaction.atomic():
-                locked_sub = UserSubscription.objects.select_for_update().get(pk=sub.pk)
-                locked_sub.pending_downgrade_tier = target_tier
-                locked_sub.save()
-
-            user.subscription = locked_sub
-            return {
-                'status': 'downgrade_scheduled',
-                'old_tier': sub.tier,
-                'new_tier': sub.tier,
-                'pending_tier': target_tier,
-                'end_date': sub.end_date
-            }
-
-    def cancel_downgrade(self, user) -> dict:
-        """Hủy yêu cầu hạ cấp đang chờ xử lý."""
-        sub = getattr(user, 'subscription', None)
-        if not sub or not sub.pending_downgrade_tier:
-            raise ValueError("Không có yêu cầu hạ cấp nào đang chờ xử lý.")
-
-        with transaction.atomic():
-            locked_sub = UserSubscription.objects.select_for_update().get(pk=sub.pk)
-            cancelled_tier = locked_sub.pending_downgrade_tier
-            locked_sub.pending_downgrade_tier = None
-            locked_sub.save()
-
-        user.subscription = locked_sub
-        return {
-            'status': 'cancelled',
-            'cancelled_tier': cancelled_tier,
-            'current_tier': locked_sub.tier
-        }

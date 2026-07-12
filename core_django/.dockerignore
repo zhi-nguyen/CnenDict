@@ -1,0 +1,28 @@
+# Ignore large run-time directories
+data/
+media/
+staticfiles/
+scratch/
+import_data/
+
+# Ignore databases
+*.sqlite3
+
+# Ignore compressed assets and media
+*.tar.gz
+*.zip
+*.mp3
+*.wav
+
+# Ignore python caching
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore local configs and secrets
+.env
+.env.local
+key.json
+cnen-auth-key.json
+celerybeat-schedule

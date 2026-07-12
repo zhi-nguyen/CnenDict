@@ -8,7 +8,7 @@ from celery.result import AsyncResult
 import re
 from django.db.models import Q, Case, When, Value, IntegerField, F, Exists, OuterRef
 from django.contrib.postgres.search import SearchQuery
-from django.db.models.functions import Length, StrIndex
+from django.db.models.functions import Length, StrIndex, Lower
 
 from .models import EnWord, EnExample
 from .serializers import EnWordSerializer
@@ -31,6 +31,7 @@ class EnWordSearchView(generics.ListAPIView):
 
         def db_lookup():
             exact_example = None
+            match = None
             cleaned_for_search = re.sub(r'[. , ! ? : ; ( ) \[ \] { } “ ” ‘ ’ \' "]+', ' ', query).strip()
             query_word_len = len(cleaned_for_search.split())
 
@@ -40,35 +41,36 @@ class EnWordSearchView(generics.ListAPIView):
                 
                 if not is_vietnamese:
                     # English query flow: check exact english match first
-                    match = EnExample.objects.filter(english__iexact=cleaned_query_end).first()
+                    matches = list(EnExample.objects.filter(english__iexact=cleaned_query_end)[:1])
+                    match = matches[0] if matches else None
                     
                     # Word boundary match for single-word English queries
                     if not match and cleaned_for_search and query_word_len == 1:
-                        word_boundary_pattern = r'\y' + re.escape(cleaned_for_search) + r'\y'
-                        match = (
+                        query_obj = SearchQuery(cleaned_for_search, config='english')
+                        matches = list(
                             EnExample.objects
-                            .filter(english__iregex=word_boundary_pattern)
-                            .order_by(Length('english'))
-                            .first()
+                            .filter(search_vector=query_obj)
+                            .order_by(Length('english'))[:1]
                         )
+                        match = matches[0] if matches else None
                     
                     # icontains fallback for multi-word English queries
                     if not match and cleaned_for_search and query_word_len > 1:
-                        match = (
+                        matches = list(
                             EnExample.objects
                             .filter(english__icontains=cleaned_for_search)
-                            .order_by(Length('english'))
-                            .first()
+                            .order_by(Length('english'))[:1]
                         )
+                        match = matches[0] if matches else None
                 else:
                     # Vietnamese translation fallback: check vietnamese column only
                     if cleaned_for_search and query_word_len >= 3:
-                        match = (
+                        matches = list(
                             EnExample.objects
                             .filter(vietnamese__icontains=cleaned_for_search)
-                            .order_by(Length('vietnamese'))
-                            .first()
+                            .order_by(Length('vietnamese'))[:1]
                         )
+                        match = matches[0] if matches else None
                 
                 if match:
                     exact_example = {
@@ -79,7 +81,7 @@ class EnWordSearchView(generics.ListAPIView):
 
             # Check if there are matches in EnWord using fast B-tree queries
             if not is_vietnamese:
-                has_exact_word = EnWord.objects.filter(word__iexact=cleaned_for_search).exists()
+                has_exact_word = EnWord.objects.annotate(word_lower=Lower('word')).filter(word_lower=cleaned_for_search.lower()).exists()
                 has_data = has_exact_word or (exact_example is not None)
             else:
                 # For Vietnamese translation, check if translation_vi contains or fallback to exists
@@ -162,7 +164,9 @@ class EnWordSearchView(generics.ListAPIView):
             # 1. Vietnamese Query Flow: Search translation_vi and vietnamese in examples
             filter_q = Q(translation_vi__icontains=q_lower)
             
-            if len(cleaned_query) >= 2:
+            # Skip example search for short queries (< 2 words) — common words match too many examples
+            query_word_count = len(cleaned_query.split())
+            if query_word_count >= 2:
                 # Find matching word IDs from examples (trigram index scan)
                 example_word_ids = list(
                     EnExample.objects.filter(
@@ -174,9 +178,12 @@ class EnWordSearchView(generics.ListAPIView):
 
             queryset = queryset.filter(filter_q)
             
-            has_example_match = Exists(
-                EnExample.objects.filter(word_id=OuterRef('pk'), vietnamese__icontains=cleaned_query)
-            )
+            if query_word_count >= 2:
+                has_example_match = Exists(
+                    EnExample.objects.filter(word_id=OuterRef('pk'), vietnamese__icontains=cleaned_query)
+                )
+            else:
+                has_example_match = Value(False)
             
             # Match levels for Vietnamese: 3, 4, 5
             queryset = queryset.annotate(
@@ -193,12 +200,14 @@ class EnWordSearchView(generics.ListAPIView):
             )
         else:
             # 2. English Query Flow: Search English word and search_vector in examples
-            filter_q = Q(word__iexact=cleaned_query) | Q(word__istartswith=cleaned_query)
+            queryset = queryset.annotate(word_lower=Lower('word'))
+            filter_q = Q(word_lower=q_lower) | Q(word_lower__startswith=q_lower)
             
-            # SearchQuery for FTS Search on english config
-            query_obj = SearchQuery(cleaned_query, config='english')
-            
+            # Skip FTS on examples for short queries (< 2 chars) — single letters match nearly all examples
             if len(cleaned_query) >= 2:
+                # SearchQuery for FTS Search on english config
+                query_obj = SearchQuery(cleaned_query, config='english')
+                
                 # Find matching word IDs from examples using English FTS only
                 example_word_ids = list(
                     EnExample.objects.filter(
@@ -208,22 +217,14 @@ class EnWordSearchView(generics.ListAPIView):
                 if example_word_ids:
                     filter_q |= Q(id__in=example_word_ids)
 
-                # Generate substrings of query for fast word_idx match
-                substrings = []
-                for i in range(len(cleaned_query)):
-                    for j in range(i + 2, len(cleaned_query) + 1):
-                        sub = cleaned_query[i:j].strip()
-                        if sub and len(sub) >= 2:
-                            substrings.append(sub)
-                substrings = list(set(substrings))
-                if substrings:
-                    filter_q |= Q(word__in=substrings)
-
             queryset = queryset.filter(filter_q)
             
-            has_example_match = Exists(
-                EnExample.objects.filter(word_id=OuterRef('pk'), search_vector=query_obj)
-            )
+            if len(cleaned_query) >= 2:
+                has_example_match = Exists(
+                    EnExample.objects.filter(word_id=OuterRef('pk'), search_vector=query_obj)
+                )
+            else:
+                has_example_match = Value(False)
             
             # Match levels for English: 1, 2, 4, 5
             queryset = queryset.annotate(
@@ -231,14 +232,35 @@ class EnWordSearchView(generics.ListAPIView):
                 word_idx=StrIndex(Value(cleaned_query), F('word'))
             ).annotate(
                 match_level=Case(
-                    When(word__iexact=cleaned_query, then=Value(1)),
-                    When(word__istartswith=cleaned_query, then=Value(2)),
+                    When(word_lower=q_lower, then=Value(1)),
+                    When(word_lower__startswith=q_lower, then=Value(2)),
                     When(has_example_match, then=Value(4)),
                     When(word_idx__gt=0, then=Value(5)),
                     default=Value(999999),
                     output_field=IntegerField(),
                 )
             )
+
+        # Annotate translation matching index and CEFR priority for ranking
+        queryset = queryset.annotate(
+            translation_index=StrIndex(Lower(F('translation_vi')), Value(q_lower)),
+            cefr_priority=Case(
+                When(cefr_level__iexact='A1', then=Value(6)),
+                When(cefr_level__iexact='A2', then=Value(5)),
+                When(cefr_level__iexact='B1', then=Value(4)),
+                When(cefr_level__iexact='B2', then=Value(3)),
+                When(cefr_level__iexact='C1', then=Value(2)),
+                When(cefr_level__iexact='C2', then=Value(1)),
+                default=Value(0),
+                output_field=IntegerField(),
+            )
+        ).annotate(
+            adjusted_trans_index=Case(
+                When(translation_index=0, then=Value(999999)),
+                default='translation_index',
+                output_field=IntegerField(),
+            )
+        )
 
         # 3. Conditional sorting length exclusively for Match Level 5
         queryset = queryset.annotate(
@@ -256,7 +278,7 @@ class EnWordSearchView(generics.ListAPIView):
             queryset = queryset.filter(match_level__lte=4)
             
         # 5. Final Sort Order
-        queryset = queryset.order_by('match_level', '-reverse_sort_len', 'word')
+        queryset = queryset.order_by('match_level', 'adjusted_trans_index', '-cefr_priority', '-reverse_sort_len', 'word')
         
         return queryset
 

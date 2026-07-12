@@ -187,7 +187,7 @@ async def generate_image(req: GenerateRequest):
 
             def genai_generate():
                 response = genai_client.models.generate_images(
-                    model="imagen-3.0-generate-002",
+                    model="imagen-4.0-ultra-generate-001",
                     prompt=prompt,
                     config=types.GenerateImagesConfig(
                         number_of_images=1,

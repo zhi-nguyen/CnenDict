@@ -10,6 +10,7 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.throttling import ScopedRateThrottle
 from django.core.cache import cache
 from google.cloud import storage
+from django.db.models import Prefetch
 from .models import Exam, Section, Question, Option
 from .serializers import ExamSerializer, ExamListSerializer
 from .throttles import UniqueExamAccessThrottle
@@ -56,7 +57,17 @@ class ExamViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         queryset = super().get_queryset()
         if self.action in ['retrieve', 'full_exam']:
-            queryset = queryset.prefetch_related('sections__questions__options')
+            queryset = queryset.prefetch_related(
+                Prefetch(
+                    'sections',
+                    queryset=Section.objects.all()
+                ),
+                Prefetch(
+                    'sections__questions',
+                    queryset=Question.objects.select_related('section')
+                ),
+                'sections__questions__options'
+            )
         level = self.request.query_params.get('level', None)
         if level is not None:
             queryset = queryset.filter(level__iexact=level)

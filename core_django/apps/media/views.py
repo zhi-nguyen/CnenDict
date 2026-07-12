@@ -7,9 +7,17 @@ from .tasks import get_word_by_id, generate_word_image_task, trigger_image_regen
 
 logger = logging.getLogger(__name__)
 
+from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
+
+class GetWordImageAnonThrottle(AnonRateThrottle):
+    rate = '5/minute'
+
+class GetWordImageUserThrottle(UserRateThrottle):
+    rate = '15/minute'
+
 class GetWordImageView(APIView):
     permission_classes = [AllowAny]
-    throttle_classes = []
+    throttle_classes = [GetWordImageAnonThrottle, GetWordImageUserThrottle]
 
     def get(self, request, lang, word_id):
         redis_key = f"img:{lang}:{word_id}"
@@ -29,33 +37,10 @@ class GetWordImageView(APIView):
             cache.set(redis_key, data, timeout=None)  # Infinite cache
             return Response(data)
 
-        # 3. Cache Miss & DB Miss -> Trigger Celery Task
-        # Check if already generating (Redis lock flag)
-        lock_key = f"generating:img:{lang}:{word_id}"
-        if cache.get(lock_key):
-            return Response({"status": "GENERATING"})
-
-        # Get WebSocket routing ID
-        user_id = None
-        if request.user.is_authenticated:
-            user_id = str(request.user.id)
-        else:
-            guest_id = request.query_params.get('guest_id')
-            if guest_id:
-                user_id = guest_id if str(guest_id).startswith('guest_') else f"guest_{guest_id}"
-
-        # Acquire lock for 5 minutes
-        cache.set(lock_key, True, timeout=300)
-        cache.set(redis_key, {"status": "GENERATING"}, timeout=300)
-
-        # Trigger Celery Task in the correct queue
-        user_tier = getattr(request.user.subscription, 'tier', 'Free') if request.user.is_authenticated and hasattr(request.user, 'subscription') else 'Free'
-        generate_word_image_task.apply_async(
-            args=[str(word_id), lang, user_id],
-            kwargs={'user_tier': user_tier}
-        )
-        
-        return Response({"status": "GENERATING"}, status=202)
+        # 3. Cache Miss & DB Miss -> Return COLLECTING (Disabled auto generation)
+        data = {"status": "collecting"}
+        cache.set(redis_key, data, timeout=300)
+        return Response(data)
 
 
 
