@@ -12,8 +12,8 @@ ROLE_RELATIONSHIPS = {
         "sulking_enabled": True,
     },
     "Sư tỷ": {
-        "agent_role": "Sư đệ",
-        "agent_personality": "Gentle Junior Brother",
+        "agent_role": "Sư muội",
+        "agent_personality": "Gentle Junior Sister",
         "sulking_enabled": False,
     },
     "Muội muội": {
@@ -139,7 +139,7 @@ def validate_user_role(user_role: str) -> str:
     # Try to map old Chinese names to new Vietnamese names
     old_to_new = {
         "师兄": "Sư huynh",
-        "师姐": "Tỷ tỷ",
+        "师姐": "Sư tỷ",
         "师弟": "Đệ đệ",
         "师妹": "Muội muội",
         "小师妹": "Muội muội",

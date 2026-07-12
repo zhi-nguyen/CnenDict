@@ -30,9 +30,17 @@ class ChineseTutorAgent:
                 enum=["neutral", "happy", "excited", "cheerful", "strict", "concerned", "sulking", "angry"],
                 description="The emotion tag to control the avatar or TTS expression."
             ),
+            "active_joy": types.Schema(
+                type=types.Type.NUMBER,
+                description="The calculated active joy value after stimulus absorption (0.0 to 1.0)."
+            ),
+            "active_sad": types.Schema(
+                type=types.Type.NUMBER,
+                description="The calculated active sad value after stimulus absorption (0.0 to 1.0)."
+            ),
             "thought": types.Schema(
                 type=types.Type.STRING,
-                description="Internal reasoning about the user's intent. Keep it short."
+                description="Internal reasoning about the user's intent and emotional calculation. Keep it short."
             ),
             "target_text": types.Schema(
                 type=types.Type.STRING,
@@ -62,12 +70,12 @@ class ChineseTutorAgent:
                         "question": types.Schema(type=types.Type.STRING),
                         "options": types.Schema(type=types.Type.ARRAY, items=types.Schema(type=types.Type.STRING)),
                         "answer": types.Schema(type=types.Type.STRING)
-                    },
-                    required=["id", "type", "question", "answer"]
+                     },
+                     required=["id", "type", "question", "answer"]
                 )
             )
         },
-        required=["emotion", "thought", "target_text", "translation_hint", "phonetic_guide", "action", "quiz_list"]
+        required=["emotion", "active_joy", "active_sad", "thought", "target_text", "translation_hint", "phonetic_guide", "action", "quiz_list"]
     )
     
     def __init__(self):
@@ -78,17 +86,20 @@ class ChineseTutorAgent:
     
     def _format_conversation_history(
         self, 
-        conversation_history: List[Dict[str, Any]]
+        conversation_history: List[Dict[str, Any]],
+        learning_language: str = "zh"
     ) -> List[types.Content]:
         """
         Convert Redis conversation history to Gemini format.
         
         Args:
             conversation_history: List of dicts with 'role' and 'content' keys
+            learning_language: The target language being learned ('zh' or 'en')
             
         Returns:
             List of Gemini Content objects
         """
+        import json
         formatted_history = []
         
         for msg in conversation_history[-settings.MAX_HISTORY_TURNS:]:
@@ -98,6 +109,16 @@ class ChineseTutorAgent:
             # Map roles to Gemini's expected format
             gemini_role = "user" if role == "user" else "model"
             
+            # If assistant message, try to parse JSON and sanitize target_text
+            if role == "assistant":
+                try:
+                    data = json.loads(content)
+                    if isinstance(data, dict):
+                        target_text = data.get("target_text", "")
+                        content = self.sanitize_history_text(target_text, learning_language)
+                except (json.JSONDecodeError, TypeError):
+                    content = self.sanitize_history_text(content, learning_language)
+            
             formatted_history.append(
                 types.Content(
                     role=gemini_role,
@@ -106,6 +127,71 @@ class ChineseTutorAgent:
             )
         
         return formatted_history
+        
+    @staticmethod
+    def sanitize_history_text(text: str, learning_language: str) -> str:
+        """
+        Sanitize assistant conversation history to remove leaked Vietnamese words
+        or recover Chinese sentences if the model outputted entirely in Vietnamese.
+        """
+        if not text:
+            return ""
+        if learning_language == "zh":
+            import re
+            # 1. Replace common wuxia pronouns that leak from Vietnamese
+            replacements = {
+                "Muội Muội": "妹妹",
+                "Muội muội": "妹妹",
+                "muội muội": "妹妹",
+                "Sư Huynh": "师兄",
+                "Sư huynh": "师兄",
+                "sư huynh": "师兄",
+                "Sư Tỷ": "师姐",
+                "Sư tỷ": "师姐",
+                "sư tỷ": "师姐",
+                "Sư Đệ": "师弟",
+                "Sư đệ": "师弟",
+                "sư đệ": "师弟",
+                "Tỷ Tỷ": "姐姐",
+                "Tỷ tỷ": "姐姐",
+                "tỷ tỷ": "姐姐",
+                "Đồng Môn": "同门",
+                "Đồng môn": "同门",
+                "đồng môn": "同门",
+            }
+            for vi, zh in replacements.items():
+                text = text.replace(vi, zh)
+                
+            # 2. Check if the text is entirely or mostly Vietnamese (Latin characters with diacritics).
+            # We count characters to determine if it is mostly Vietnamese.
+            latin_chars = len(re.findall(r'[a-zA-ZàáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđĐ]', text))
+            chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
+            
+            total_len = chinese_chars + latin_chars
+            if latin_chars > 0 and (chinese_chars == 0 or (latin_chars / total_len) > 0.4):
+                # The model spoke Vietnamese. Let's translate common phrases or just fall back to a clean Chinese greeting/context
+                phrases_map = {
+                    "không bình luận": "不评论",
+                    "dung mạo": "容貌",
+                    "chỉ phụ trách": "只负责",
+                    "việc dạy học": "教学",
+                    "dạy học": "教学",
+                    "quá lời rồi": "过奖了",
+                    "xin chào": "你好",
+                    "cảm ơn": "谢谢",
+                }
+                for vi, zh in phrases_map.items():
+                    text = text.replace(vi, zh)
+                for vi, zh in replacements.items():
+                    text = text.replace(vi, zh)
+                    
+                # Remove any remaining Latin/Vietnamese words and extra spaces
+                text = re.sub(r'[a-zA-ZàáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđĐ\s]+', '', text)
+                
+                # If empty, fallback to a safe sentence
+                if not text:
+                    text = "我们开始学习吧。"
+        return text
     
     async def generate_response(
         self,
@@ -116,7 +202,8 @@ class ChineseTutorAgent:
         conversation_history: Optional[List[Dict[str, Any]]] = None,
         user_level: str = "Beginner",
         topic: str = "Daily Conversation",
-        user_name: Optional[str] = None
+        user_name: Optional[str] = None,
+        learning_language: str = "zh"
     ) -> Dict[str, Any]:
         """
         Generate a structured response from the AI tutor.
@@ -135,7 +222,7 @@ class ChineseTutorAgent:
             # Prepare conversation history
             history = []
             if conversation_history:
-                history = self._format_conversation_history(conversation_history)
+                history = self._format_conversation_history(conversation_history, learning_language=learning_language)
             
             # Add current user message
             history.append(

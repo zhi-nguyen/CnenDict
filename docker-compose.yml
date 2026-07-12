@@ -362,6 +362,7 @@ services:
       context: ./ai_chat_service
 
     volumes:
+      - ./ai_chat_service:/app
       - ./core_django/key.json:/app/key.json:ro
     environment:
       - REDIS_URL=${REDIS_URL:-redis://:xiaoyue_redis_secret@redis:6379/0}

@@ -64,37 +64,116 @@ async def process_chat_request(redis_client: RedisClient, agent: ChineseTutorAge
     """
     user_id = payload.get("user_id")
     user_text = payload.get("user_text")
+    persona_id = payload.get("persona_id")
     if not user_id or not user_text:
         logger.warning(f"Invalid chat request payload: {payload}")
         return
 
-    user_role = payload.get("user_role", "Sư huynh")
-    user_level = payload.get("user_level", "Beginner")
-    topic = payload.get("topic", "Daily Conversation")
-    user_name = payload.get("user_name", user_role)
+    # Retrieve dynamic persona and emotional state parameters from payload
+    agent_name = payload.get("agent_name", "小月")
+    personality_desc = payload.get("personality_desc", "Vui vẻ")
+    user_honorific = payload.get("user_honorific", "师兄")
+    agent_self_ref = payload.get("agent_self_ref", "妹妹")
+    
+    joy_current = float(payload.get("joy_current", 0.5))
+    sad_current = float(payload.get("sad_current", 0.1))
+    joy_sensitivity = float(payload.get("joy_sensitivity", 1.0))
+    sad_sensitivity = float(payload.get("sad_sensitivity", 0.5))
+    joy_decay_rate = float(payload.get("joy_decay_rate", 0.4))
+    sad_decay_rate = float(payload.get("sad_decay_rate", 0.6))
+    
     learning_language = payload.get("learning_language", "zh")
     context_setting = payload.get("context_setting", "wuxia")
+    user_level = payload.get("user_level", "Beginner")
+    user_name = payload.get("user_name", "User")
+    relation_type = payload.get("relation_type", "default")
 
-    # Determine agent role and personality based on role mapping
-    relationship = ROLE_RELATIONSHIPS.get(user_role, ROLE_RELATIONSHIPS["Sư huynh"])
-    agent_role = relationship["agent_role"]
-    sulking_enabled = relationship["sulking_enabled"]
+    # Derive language-aware xưng hô variables
+    user_honorific_vi = user_honorific
+    agent_self_ref_vi = agent_self_ref
+    user_honorific_zh = user_honorific
+    agent_self_ref_zh = agent_self_ref
+    
+    # Mapping dictionaries for wuxia
+    zh_wuxia_mapping = {
+        "Sư huynh": "师兄",
+        "Sư tỷ": "师姐",
+        "Đệ đệ": "师弟",
+        "Sư đệ": "师弟",
+        "Muội muội": "妹妹",
+        "Sư muội": "师妹",
+        "Tỷ tỷ": "姐姐",
+        "Đồng môn": "同门",
+        "Đệ tử": "徒儿",
+        "Sư phụ": "为师",
+        "Nữ Sư Phụ": "为师",
+    }
+    vi_wuxia_mapping = {
+        "师兄": "Sư huynh",
+        "师姐": "Sư tỷ",
+        "师弟": "Đệ đệ",
+        "师妹": "Muội muội",
+        "妹妹": "Muội muội",
+        "姐姐": "Tỷ tỷ",
+        "同门": "Đồng môn",
+        "徒儿": "Đệ tử",
+        "为师": "Sư phụ",
+    }
 
-    # Retrieve state and history
-    sulking_level = await redis_client.get_sulking_level(user_id)
-    conversation_history = await redis_client.get_conversation_history(user_id, limit=settings.MAX_HISTORY_TURNS)
+    if context_setting == "wuxia":
+        # 1. Map user_honorific
+        if user_honorific in zh_wuxia_mapping:
+            user_honorific_zh = zh_wuxia_mapping[user_honorific]
+            user_honorific_vi = user_honorific
+        else:
+            user_honorific_zh = user_honorific
+            user_honorific_vi = vi_wuxia_mapping.get(user_honorific, user_honorific)
 
-    # Build prompt instructions
+        # 2. Map agent_self_ref
+        if agent_self_ref in zh_wuxia_mapping:
+            agent_self_ref_zh = zh_wuxia_mapping[agent_self_ref]
+            agent_self_ref_vi = agent_self_ref
+        else:
+            agent_self_ref_zh = agent_self_ref
+            agent_self_ref_vi = vi_wuxia_mapping.get(agent_self_ref, agent_self_ref)
+    else:
+        # Modern & Academic: user_honorific and agent_self_ref are Vietnamese strings.
+        # Map them to standard Chinese pronouns for Chinese target_text.
+        if user_honorific in ("Anh", "Chị", "Em", "Bạn"):
+            user_honorific_zh = "你"
+        elif user_honorific in ("Cô", "Thầy"):
+            user_honorific_zh = "您"
+        else:
+            user_honorific_zh = "你"
+            
+        if agent_self_ref in ("Em", "Chị", "Mình", "Tôi"):
+            agent_self_ref_zh = "我"
+        elif agent_self_ref == "Cô":
+            agent_self_ref_zh = "老师"
+        else:
+            agent_self_ref_zh = "我"
+
+    # Retrieve history
+    conversation_history = await redis_client.get_conversation_history(user_id, limit=settings.MAX_HISTORY_TURNS, persona_id=persona_id)
+
+    # Build prompt instructions using the dynamic persona parameters
     from prompts import get_system_instruction
     system_instruction = get_system_instruction(
-        user_role=user_role,
-        agent_role=agent_role,
-        sulking_level=sulking_level,
-        user_level=user_level,
-        topic=topic,
-        user_name=user_name,
+        agent_name=agent_name,
+        personality_desc=personality_desc,
+        user_honorific_zh=user_honorific_zh,
+        agent_self_ref_zh=agent_self_ref_zh,
+        user_honorific_vi=user_honorific_vi,
+        agent_self_ref_vi=agent_self_ref_vi,
+        joy_current=joy_current,
+        sad_current=sad_current,
+        joy_sensitivity=joy_sensitivity,
+        sad_sensitivity=sad_sensitivity,
         learning_language=learning_language,
-        context_setting=context_setting
+        context_setting=context_setting,
+        user_level=user_level,
+        user_name=user_name,
+        relation_type=relation_type,
     )
 
     past_context = payload.get("past_context", "")
@@ -103,7 +182,7 @@ async def process_chat_request(redis_client: RedisClient, agent: ChineseTutorAge
 
 
     # Prepare history for Gemini API
-    history = agent._format_conversation_history(conversation_history)
+    history = agent._format_conversation_history(conversation_history, learning_language=learning_language)
     history.append(
         types.Content(
             role="user",
@@ -123,7 +202,7 @@ async def process_chat_request(redis_client: RedisClient, agent: ChineseTutorAge
     )
 
     # Save user message to Redis memory
-    await redis_client.add_to_conversation_history(user_id, {"role": "user", "content": user_text})
+    await redis_client.add_to_conversation_history(user_id, {"role": "user", "content": user_text}, persona_id=persona_id)
 
     # Keep track of full raw response to parse at the end
     full_response_text = ""
@@ -143,6 +222,93 @@ async def process_chat_request(redis_client: RedisClient, agent: ChineseTutorAge
         parser = StreamTutorParser()
         usage = None
 
+        # Queue for sequential TTS synthesis jobs
+        tts_queue = asyncio.Queue()
+
+        class _AudioPushCallback(speechsdk.audio.PushAudioOutputStreamCallback):
+            def __init__(self):
+                super().__init__()
+                self.audio_data = bytearray()
+
+            def write(self, audio_buffer: memoryview) -> int:
+                self.audio_data.extend(audio_buffer)
+                return audio_buffer.nbytes
+
+            def close(self):
+                pass
+
+        async def tts_worker():
+            try:
+                while True:
+                    job = await tts_queue.get()
+                    if job is None:
+                        tts_queue.task_done()
+                        break
+                    
+                    sentence, emotion = job
+                    try:
+                        # Signal: audio sentence start
+                        await _publish_json(client, user_id, "audio_sentence_start", {
+                            "text": sentence,
+                            "persona_id": persona_id,
+                        })
+
+                        if speech_config is not None:
+                            presets_dict = get_voice_presets(learning_language)
+                            preset = presets_dict.get(emotion, presets_dict["neutral"])
+                            voice = preset["voice"]
+                            rate = preset["rate"]
+                            volume = preset["volume"]
+                            
+                            tts_text = _sanitize_text_for_audio(sentence, learning_language)
+                            
+                            # Skip TTS synthesis for Chinese mode if no Chinese characters are present
+                            if learning_language == "zh" and not any('\u4e00' <= char <= '\u9fff' for char in tts_text):
+                                logger.info(f"Skipping TTS for sentence (no Chinese characters): '{sentence}'")
+                                continue
+                                
+                            xml_lang = 'en-US' if learning_language == 'en' else 'zh-CN'
+                            ssml = f"""<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='{xml_lang}'>
+                                <voice name='{voice}'>
+                                    <prosody rate='{rate}' volume='{volume}'>
+                                        {tts_text}
+                                    </prosody>
+                                </voice>
+                            </speak>"""
+                            
+                            push_callback = _AudioPushCallback()
+                            push_stream = speechsdk.audio.PushAudioOutputStream(push_callback)
+                            audio_output_config = speechsdk.audio.AudioOutputConfig(stream=push_stream)
+                            synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config, audio_config=audio_output_config)
+                            
+                            result_future = synthesizer.speak_ssml_async(ssml)
+                            synthesis_result = await asyncio.to_thread(result_future.get)
+                            
+                            if synthesis_result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
+                                audio_bytes = bytes(push_callback.audio_data)
+                                chunk_size = 4096
+                                for i in range(0, len(audio_bytes), chunk_size):
+                                    await client.publish(audio_channel, audio_bytes[i:i + chunk_size])
+                            elif synthesis_result.reason == speechsdk.ResultReason.Canceled:
+                                cancellation = synthesis_result.cancellation_details
+                                logger.error(f"Speech synthesis canceled: {cancellation.reason} - {cancellation.error_details}")
+                        else:
+                            logger.warning("Azure Speech Config is not initialized. Skipping audio generation.")
+                    except Exception as tts_err:
+                        logger.error(f"Azure Speech Synthesis failed for sentence '{sentence}': {tts_err}")
+                    finally:
+                        # Signal: audio sentence end
+                        await _publish_json(client, user_id, "audio_sentence_end", {
+                            "text": sentence,
+                            "persona_id": persona_id,
+                        })
+                        tts_queue.task_done()
+            except asyncio.CancelledError:
+                pass
+
+        # Start background worker task
+        worker_task = asyncio.create_task(tts_worker())
+
         # Iterate over stream chunks asynchronously
         async for chunk in response_stream:
             chunk_text = chunk.text
@@ -157,95 +323,45 @@ async def process_chat_request(redis_client: RedisClient, agent: ChineseTutorAge
                     "text": sentence,
                     "emotion": emotion,
                     "is_final": False,
+                    "persona_id": persona_id,
                 })
                 logger.info(f"Published sentence chunk: '{sentence}' with emotion '{emotion}'")
 
-                # Signal: audio sentence start
-                await _publish_json(client, user_id, "audio_sentence_start", {
-                    "text": sentence,
-                })
+                # Put sentence job into queue
+                await tts_queue.put((sentence, emotion))
 
-                # Stream binary audio chunks via Azure Speech SDK
-                if speech_config is not None:
-                    try:
-                        presets_dict = get_voice_presets(learning_language)
-                        preset = presets_dict.get(emotion, presets_dict["neutral"])
-                        voice = preset["voice"]
-                        rate = preset["rate"]
-                        volume = preset["volume"]
-                        
-                        tts_text = _sanitize_text_for_audio(sentence)
-                        xml_lang = 'en-US' if learning_language == 'en' else 'zh-CN'
-                        
-                        # Construct SSML representation
-                        ssml = f"""<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='{xml_lang}'>
-                            <voice name='{voice}'>
-                                <prosody rate='{rate}' volume='{volume}'>
-                                    {tts_text}
-                                </prosody>
-                            </voice>
-                        </speak>"""
-                        
-                        # Use PushAudioOutputStream with a callback to capture audio data
-                        class _AudioPushCallback(speechsdk.audio.PushAudioOutputStreamCallback):
-                            def __init__(self):
-                                super().__init__()
-                                self.audio_data = bytearray()
-
-                            def write(self, audio_buffer: memoryview) -> int:
-                                self.audio_data.extend(audio_buffer)
-                                return audio_buffer.nbytes
-
-                            def close(self):
-                                pass
-
-                        push_callback = _AudioPushCallback()
-                        push_stream = speechsdk.audio.PushAudioOutputStream(push_callback)
-                        audio_output_config = speechsdk.audio.AudioOutputConfig(stream=push_stream)
-                        
-                        # Synthesizer instance for this task
-                        synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config, audio_config=audio_output_config)
-                        
-                        # Speak SSML and wait for completion
-                        result_future = synthesizer.speak_ssml_async(ssml)
-                        synthesis_result = await asyncio.to_thread(result_future.get)
-                        
-                        if synthesis_result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
-                            # Publish collected audio data in chunks to Redis
-                            audio_bytes = bytes(push_callback.audio_data)
-                            chunk_size = 4096
-                            for i in range(0, len(audio_bytes), chunk_size):
-                                await client.publish(audio_channel, audio_bytes[i:i + chunk_size])
-                        elif synthesis_result.reason == speechsdk.ResultReason.Canceled:
-                            cancellation = synthesis_result.cancellation_details
-                            logger.error(f"Speech synthesis canceled: {cancellation.reason} - {cancellation.error_details}")
-                            
-                    except Exception as tts_err:
-                        logger.error(f"Azure Speech Synthesis failed for sentence '{sentence}': {tts_err}")
-                else:
-                    logger.warning("Azure Speech Config is not initialized. Skipping audio generation.")
-
-                # Signal: audio sentence end
-                await _publish_json(client, user_id, "audio_sentence_end", {
-                    "text": sentence,
-                })
+        # Wait for TTS queue processing to complete
+        await tts_queue.put(None)
+        await worker_task
 
         # Parse full generated JSON response
         import json_repair
         result = json_repair.loads(full_response_text)
         
         # Save assistant content to Redis memory
-        await redis_client.add_to_conversation_history(user_id, {"role": "assistant", "content": result.get("target_text", "")})
+        await redis_client.add_to_conversation_history(user_id, {"role": "assistant", "content": json.dumps(result, ensure_ascii=False)}, persona_id=persona_id)
 
-        # Dynamically adjust sulking level if enabled
-        action = result.get("action", "none")
-        if sulking_enabled:
-            if action == "correction":
-                await redis_client.decrement_sulking_level(user_id)
-            else:
-                import random
-                if random.random() < 0.15:
-                    await redis_client.increment_sulking_level(user_id)
+        # Calculate dynamic emotion state and decay
+        active_joy = result.get("active_joy")
+        active_sad = result.get("active_sad")
+        
+        if active_joy is None:
+            active_joy = joy_current
+        else:
+            active_joy = float(active_joy)
+            
+        if active_sad is None:
+            active_sad = sad_current
+        else:
+            active_sad = float(active_sad)
+
+        # Apply decay to determine the stored state for the next turn
+        joy_stored = max(0.0, min(1.0, active_joy * (1.0 - joy_decay_rate)))
+        sad_stored = max(0.0, min(1.0, active_sad * (1.0 - sad_decay_rate)))
+
+        # Persist updated emotional state in Redis
+        await client.set(f"chat:emotion:{user_id}:{persona_id}" if persona_id else f"chat:emotion:{user_id}", json.dumps({"joy": joy_stored, "sad": sad_stored}))
+        logger.info(f"Updated emotion state for user {user_id} (persona {persona_id}): active_joy={active_joy} (stored: {joy_stored}), active_sad={active_sad} (stored: {sad_stored})")
 
         # Inject token usage metadata
         if usage:
@@ -255,24 +371,28 @@ async def process_chat_request(redis_client: RedisClient, agent: ChineseTutorAge
                 "total_token_count": usage.total_token_count
             }
 
-        # Fetch updated sulking level
-        new_sulking = await redis_client.get_sulking_level(user_id)
-
         # Send final completion event
         await _publish_json(client, user_id, "ai_chat_complete", {
             "is_final": True,
             "response": result,
-            "sulking_level": new_sulking,
+            "active_joy": active_joy,
+            "active_sad": active_sad,
+            "persona_id": persona_id,
         })
-        logger.info(f"Published final chat complete response for user {user_id}")
+        logger.info(f"Published final chat complete response for user {user_id} (persona {persona_id})")
 
     except Exception as e:
         logger.error(f"Error streaming AI response: {e}", exc_info=True)
         # Publish error fallback
-        fallback = agent._get_fallback_response(user_text, sulking_level)
+        fallback = agent._get_fallback_response(user_text, 0)
+        fallback["active_joy"] = joy_current
+        fallback["active_sad"] = sad_current
         await _publish_json(client, user_id, "ai_chat_complete", {
             "is_final": True,
             "response": fallback,
+            "active_joy": joy_current,
+            "active_sad": sad_current,
+            "persona_id": persona_id,
         })
 
 

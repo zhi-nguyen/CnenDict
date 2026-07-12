@@ -63,9 +63,21 @@ class StreamTutorParser:
                 
                 # If we hit a punctuation, yield the clause/sentence
                 if char in self.delimiters:
-                    sentence = self.current_clause.strip()
-                    if sentence:
-                        yield sentence, self.emotion
-                    self.current_clause = ""
+                    should_split = True
+                    
+                    if char in {'.', '!', '?'}:
+                        # If there are characters ahead in the buffer, check the next non-space char
+                        remaining = self.buffer[i + 1:]
+                        if remaining:
+                            next_char = remaining[0]
+                            # If next char is another dot (part of ellipsis) or alphanumeric (part of decimal or abbreviation), don't split yet
+                            if next_char in {'.', '!', '?'} or next_char.isalnum():
+                                should_split = False
+                                
+                    if should_split:
+                        sentence = self.current_clause.strip()
+                        if sentence:
+                            yield sentence, self.emotion
+                        self.current_clause = ""
                     
             self.buffer = self.buffer[chars_processed:]

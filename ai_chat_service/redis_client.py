@@ -42,7 +42,8 @@ class RedisClient:
     async def get_conversation_history(
         self, 
         user_id: str, 
-        limit: int = 20
+        limit: int = 20,
+        persona_id: str = None
     ) -> List[Dict[str, Any]]:
         """
         Retrieve conversation history for a user.
@@ -50,12 +51,13 @@ class RedisClient:
         Args:
             user_id: Unique user identifier
             limit: Maximum number of messages to retrieve
+            persona_id: Optional tutor persona identifier
             
         Returns:
             List of conversation turns (oldest to newest)
         """
         client = await self.get_client()
-        key = f"chat:history:{user_id}"
+        key = f"chat:history:{user_id}:{persona_id}" if persona_id else f"chat:history:{user_id}"
         
         try:
             # Get last N messages from the list
@@ -69,7 +71,8 @@ class RedisClient:
         self, 
         user_id: str, 
         message: Dict[str, Any],
-        max_history: int = 100
+        max_history: int = 100,
+        persona_id: str = None
     ) -> bool:
         """
         Add a message to conversation history.
@@ -78,12 +81,13 @@ class RedisClient:
             user_id: Unique user identifier
             message: Message dict with keys like 'role', 'content', 'timestamp'
             max_history: Maximum messages to keep in history
+            persona_id: Optional tutor persona identifier
             
         Returns:
             True if successful
         """
         client = await self.get_client()
-        key = f"chat:history:{user_id}"
+        key = f"chat:history:{user_id}:{persona_id}" if persona_id else f"chat:history:{user_id}"
         
         try:
             # Add message to the right of the list
@@ -100,10 +104,10 @@ class RedisClient:
             logger.error(f"Error adding to conversation history: {e}")
             return False
     
-    async def clear_conversation_history(self, user_id: str) -> bool:
-        """Clear all conversation history for a user."""
+    async def clear_conversation_history(self, user_id: str, persona_id: str = None) -> bool:
+        """Clear all conversation history for a user and persona."""
         client = await self.get_client()
-        key = f"chat:history:{user_id}"
+        key = f"chat:history:{user_id}:{persona_id}" if persona_id else f"chat:history:{user_id}"
         
         try:
             await client.delete(key)
@@ -114,18 +118,19 @@ class RedisClient:
     
     # ==================== User State Management ====================
     
-    async def get_sulking_level(self, user_id: str) -> int:
+    async def get_sulking_level(self, user_id: str, persona_id: str = None) -> int:
         """
-        Get the current sulking level for a user.
+        Get the current sulking level for a user and persona.
         
         Args:
             user_id: Unique user identifier
+            persona_id: Optional tutor persona identifier
             
         Returns:
             Sulking level (0-3), defaults to 0
         """
         client = await self.get_client()
-        key = f"chat:sulking:{user_id}"
+        key = f"chat:sulking:{user_id}:{persona_id}" if persona_id else f"chat:sulking:{user_id}"
         
         try:
             level = await client.get(key)
@@ -134,19 +139,20 @@ class RedisClient:
             logger.error(f"Error getting sulking level: {e}")
             return 0
     
-    async def set_sulking_level(self, user_id: str, level: int) -> bool:
+    async def set_sulking_level(self, user_id: str, level: int, persona_id: str = None) -> bool:
         """
-        Set the sulking level for a user.
+        Set the sulking level for a user and persona.
         
         Args:
             user_id: Unique user identifier
             level: Sulking level (0-3)
+            persona_id: Optional tutor persona identifier
             
         Returns:
             True if successful
         """
         client = await self.get_client()
-        key = f"chat:sulking:{user_id}"
+        key = f"chat:sulking:{user_id}:{persona_id}" if persona_id else f"chat:sulking:{user_id}"
         
         try:
             # Clamp level between 0 and 3
@@ -158,28 +164,28 @@ class RedisClient:
             logger.error(f"Error setting sulking level: {e}")
             return False
     
-    async def increment_sulking_level(self, user_id: str) -> int:
+    async def increment_sulking_level(self, user_id: str, persona_id: str = None) -> int:
         """
         Increment sulking level (max 3).
         
         Returns:
             New sulking level
         """
-        current = await self.get_sulking_level(user_id)
+        current = await self.get_sulking_level(user_id, persona_id=persona_id)
         new_level = min(3, current + 1)
-        await self.set_sulking_level(user_id, new_level)
+        await self.set_sulking_level(user_id, new_level, persona_id=persona_id)
         return new_level
     
-    async def decrement_sulking_level(self, user_id: str) -> int:
+    async def decrement_sulking_level(self, user_id: str, persona_id: str = None) -> int:
         """
         Decrement sulking level (min 0).
         
         Returns:
             New sulking level
         """
-        current = await self.get_sulking_level(user_id)
+        current = await self.get_sulking_level(user_id, persona_id=persona_id)
         new_level = max(0, current - 1)
-        await self.set_sulking_level(user_id, new_level)
+        await self.set_sulking_level(user_id, new_level, persona_id=persona_id)
         return new_level
     
     # ==================== User Profile ====================

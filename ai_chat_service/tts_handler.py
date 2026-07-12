@@ -9,15 +9,33 @@ import re
 
 logger = logging.getLogger(__name__)
 
-def _sanitize_text_for_audio(text: str) -> str:
+def _sanitize_text_for_audio(text: str, learning_language: str = "zh") -> str:
     """
-    Sanitize text for speech synthesis: replace ellipses with commas to add natural pauses.
+    Sanitize text for speech synthesis:
+    1. Replace ellipses with commas to add natural pauses.
+    2. For Chinese (zh), strip out Latin/Vietnamese words so the TTS engine only reads Chinese characters.
     """
     if not text:
         return ""
     
     # Replace triple dots or ellipsis characters with a comma for better voice rhythm
-    cleaned_text = re.sub(r'(\.{2,}|…+)', '，', text)
+    comma_char = ',' if learning_language == 'en' else '，'
+    cleaned_text = re.sub(r'(\.{2,}|…+)', comma_char, text)
+    
+    if learning_language == "zh":
+        # Match one or more Latin/Vietnamese words (with common diacritics), optionally separated by spaces/hyphens
+        latin_vi_pattern = r'[a-zA-ZáàảãạâấầẩẫậăắằẳẵặéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵđĐ]+(?:\s+[a-zA-ZáàảãạâấầẩẫậăắằẳẵặéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵđĐ]+)*'
+        
+        # Remove quoted Latin/Vietnamese strings: e.g. "xin chào" or “xin chào”
+        cleaned_text = re.sub(r'["“\'‘]' + latin_vi_pattern + r'["”\'’]', '', cleaned_text)
+        
+        # Remove unquoted Latin/Vietnamese words
+        cleaned_text = re.sub(latin_vi_pattern, '', cleaned_text)
+        
+        # Clean up empty quotes and extra spaces
+        cleaned_text = re.sub(r'“”|""|\'\'|‘’', '', cleaned_text)
+        cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()
+        
     return cleaned_text
 
 
