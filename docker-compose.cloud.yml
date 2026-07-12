@@ -246,6 +246,32 @@ services:
     networks:
       - xiaoyue-network
 
+  # ── Celery Worker (Chat — RAG + Summarization) ──
+  celery-worker-chat:
+    build:
+      context: ./core_django
+    command: celery -A core_project worker -Q queue_chat --loglevel=info --concurrency=2
+    depends_on:
+      redis:
+        condition: service_healthy
+      core-django:
+        condition: service_started
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://:xiaoyue_redis_secret@redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://:xiaoyue_redis_secret@redis:6379/0}
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/key.json
+    env_file:
+      - .env
+    volumes:
+      - django_media:/app/media
+      - /opt/xiaoyue/data:/data
+      - /opt/xiaoyue/secure/key.json:/app/key.json:ro
+      - /opt/xiaoyue/secure/cnen-auth-key.json:/app/cnen-auth-key.json:ro
+    restart: unless-stopped
+    networks:
+      - xiaoyue-network
+
   # ── PDF Render Service ──
   pdf-service:
     build:
