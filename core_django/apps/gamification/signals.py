@@ -10,10 +10,11 @@ def create_gamification_profiles(sender, instance, created, **kwargs):
         DailyTarget.objects.create(user=instance)
         
         # Tạo ví coin cho user mới
-        from .models import CoinWallet, CoinConfig
-        config = CoinConfig.objects.filter(tier='Free').first()
-        initial_zh = config.initial_coins_zh if config else 0
-        initial_en = config.initial_coins_en if config else 0
-        CoinWallet.objects.create(user=instance, lang='zh', paid_balance=initial_zh)
-        CoinWallet.objects.create(user=instance, lang='en', paid_balance=initial_en)
+        from .models import CoinWallet
+        from .coin_service import CoinService
+        CoinWallet.objects.create(user=instance, lang='zh', paid_balance=0)
+        CoinWallet.objects.create(user=instance, lang='en', paid_balance=0)
+        
+        # Cấp initial coins của gói mặc định (Free)
+        CoinService.apply_initial_coins(instance, 'Free')
 

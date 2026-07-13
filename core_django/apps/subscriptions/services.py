@@ -463,6 +463,10 @@ def grant_new_user_trial_pro(user):
         # Đồng bộ instance trong memory
         user.subscription = sub
         
+        # Cấp initial coins của gói Pro dùng thử cho tài khoản mới
+        from apps.gamification.coin_service import CoinService
+        CoinService.apply_initial_coins(user, 'Pro')
+        
         transaction.on_commit(
             lambda: send_welcome_pro_gift_notification.apply_async(args=[str(user.id)], countdown=10)
         )

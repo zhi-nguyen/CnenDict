@@ -315,6 +315,48 @@ class CoinService:
             note=f'Purchased {amount} coins',
         )
 
+    @staticmethod
+    @transaction.atomic
+    def apply_initial_coins(user, tier: str) -> list:
+        """
+        Cấp coin khởi tạo tương ứng với tier cho user mới.
+        Nếu ví của user đã có số dư paid lớn hơn hoặc bằng mức khởi tạo, ta skip hoặc chỉ bù phần thiếu.
+        """
+        config = CoinConfig.objects.filter(tier=tier).first()
+        if not config:
+            return []
+
+        transactions = []
+        for lang in ['zh', 'en']:
+            initial_amount = config.initial_coins_zh if lang == 'zh' else config.initial_coins_en
+            if initial_amount <= 0:
+                continue
+
+            wallet = CoinService._get_wallet_for_update(user, lang)
+            old_paid = wallet.paid_balance
+            
+            # Chỉ nạp thêm phần chênh lệch nếu số coin khởi tạo lớn hơn số paid hiện tại
+            diff = initial_amount - old_paid
+            if diff <= 0:
+                continue
+
+            wallet.paid_balance = initial_amount
+            wallet.save(update_fields=['paid_balance', 'updated_at'])
+
+            txn = CoinTransaction.objects.create(
+                wallet=wallet,
+                user=user,
+                transaction_type='ADMIN_ADJUST',
+                balance_type='paid',
+                amount=diff,
+                paid_balance_after=wallet.paid_balance,
+                free_balance_after=wallet.free_balance,
+                note=f"Cấp Linh Thạch/Coin khởi tạo cho tài khoản mới (Gói {tier})"
+            )
+            transactions.append(txn)
+
+        return transactions
+
     # ────────────────── HELPERS ──────────────────
 
     @staticmethod
