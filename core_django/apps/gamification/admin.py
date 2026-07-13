@@ -22,3 +22,50 @@ class DailyActivityAdmin(admin.ModelAdmin):
     list_display = ('user', 'activity_date', 'is_target_met')
     list_filter = ('activity_date', 'is_target_met')
     search_fields = ('user__username', 'user__email')
+
+
+from .models import CoinWallet, CoinTransaction, CoinConfig, StudySession, StudySessionCard, CoinPurchaseOrder
+
+@admin.register(CoinConfig)
+class CoinConfigAdmin(admin.ModelAdmin):
+    list_display = ('tier', 'weekly_refill_cap', 'initial_coins_zh', 'initial_coins_en',
+                    'words_per_coin', 'daily_free_earn_limit', 'chat_create_cost', 'chat_message_cost')
+
+@admin.register(CoinWallet)
+class CoinWalletAdmin(admin.ModelAdmin):
+    list_display = ('user', 'lang', 'paid_balance', 'free_balance', 'total_balance', 'updated_at')
+    list_filter = ('lang',)
+    search_fields = ('user__username', 'user__email')
+    readonly_fields = ('id',)
+
+@admin.register(CoinTransaction)
+class CoinTransactionAdmin(admin.ModelAdmin):
+    list_display = ('user', 'wallet', 'transaction_type', 'balance_type', 'amount',
+                    'paid_balance_after', 'free_balance_after', 'created_at')
+    list_filter = ('transaction_type', 'balance_type')
+    search_fields = ('user__username', 'reference_id')
+    readonly_fields = ('id', 'wallet', 'user', 'transaction_type', 'balance_type',
+                       'amount', 'paid_balance_after', 'free_balance_after', 'reference_id')
+
+@admin.register(CoinPurchaseOrder)
+class CoinPurchaseOrderAdmin(admin.ModelAdmin):
+    list_display = ('order_code', 'user', 'lang', 'coin_amount', 'price', 'status', 'created_at')
+    list_filter = ('status', 'lang')
+    readonly_fields = ('id', 'order_code', 'sepay_transaction_id', 'bank_reference')
+
+class StudySessionCardInline(admin.TabularInline):
+    model = StudySessionCard
+    extra = 0
+    readonly_fields = ('card_id', 'word', 'status')
+
+@admin.register(StudySession)
+class StudySessionAdmin(admin.ModelAdmin):
+    list_display = ('user', 'lang', 'status', 'total_cards', 'memorized_count', 'coins_earned', 'created_at')
+    list_filter = ('status', 'lang')
+    inlines = [StudySessionCardInline]
+
+@admin.register(StudySessionCard)
+class StudySessionCardAdmin(admin.ModelAdmin):
+    list_display = ('session', 'card_id', 'word', 'status', 'updated_at')
+    list_filter = ('status',)
+

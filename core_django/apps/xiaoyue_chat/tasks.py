@@ -66,6 +66,10 @@ def dispatch_chat_request(user_id, user_text, user_role=None, user_level=None, t
     4. If counter % 6 == 0, dispatches async_summarize_and_embed for the last 6 messages
     5. Publishes complete payload (with user_text, persona_id, and past_context) to Redis channel
     """
+    coin_group_id = kwargs.pop("coin_group_id", None)
+    coin_lang = kwargs.pop("coin_lang", None)
+    coin_cost = kwargs.pop("coin_cost", 0)
+
     try:
         redis_client = get_redis_client()
         from django.conf import settings as django_settings
@@ -192,7 +196,23 @@ def dispatch_chat_request(user_id, user_text, user_role=None, user_level=None, t
         return True
     except Exception as e:
         logger.error(f"Failed to dispatch chat request: {e}", exc_info=True)
+        # Fallback refund
+        if coin_group_id and coin_lang and coin_cost > 0:
+            try:
+                from apps.gamification.coin_service import CoinService
+                from django.contrib.auth import get_user_model
+                User = get_user_model()
+                user = User.objects.get(id=user_id)
+                CoinService.refund_coins(
+                    user, coin_lang, coin_cost,
+                    reference_id=coin_group_id,
+                    note='Refund: dispatch_chat_request failed'
+                )
+                logger.info(f"Refunded {coin_cost} coins for failed chat dispatch (group={coin_group_id})")
+            except Exception as refund_err:
+                logger.error(f"CRITICAL: Failed to refund coins after chat dispatch error: {refund_err}", exc_info=True)
         return False
+
 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=30, queue='queue_chat')

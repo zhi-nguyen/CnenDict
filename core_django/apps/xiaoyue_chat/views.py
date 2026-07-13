@@ -104,6 +104,26 @@ class XiaoyueChatSendView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        # ── Trừ coin trước khi gửi tin nhắn ──
+        from apps.gamification.coin_service import CoinService, InsufficientCoinsError
+        lang = persona_obj.learning_language
+        config = CoinService.get_coin_config(user_tier)
+        cost = config.chat_message_cost if config else 1
+
+        try:
+            txns = CoinService.spend_coins(
+                user, lang, cost,
+                'SPEND_CHAT_MSG', reference_id=str(persona_obj.id),
+                note=f'Chat with {persona_obj.agent_name}'
+            )
+            coin_group_id = str(txns[0].group_id) if txns else ''
+        except InsufficientCoinsError:
+            lang_name = "Linh Thạch" if lang == "zh" else "Coin"
+            return Response(
+                {"detail": f"Không đủ {lang_name}. Hãy học thêm flashcard!"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         # Build persona dict payload
         persona = {
             "id": str(persona_obj.id),
@@ -138,19 +158,32 @@ class XiaoyueChatSendView(APIView):
             logger.error(f"Failed to fetch emotion from Redis for persona {persona_obj.id}: {e}")
             emotion = {"joy": persona_obj.joy_current, "sad": persona_obj.sad_current}
 
-        # Dispatch to Celery task with tier routing, passing persona_id
-        dispatch_chat_request.apply_async(
-            args=[
-                str(user.id),
-                user_text,
-            ],
-            kwargs={
-                "user_tier": user_tier,
-                "persona": persona,
-                "emotion": emotion,
-                "persona_id": str(persona_obj.id),
-            },
-        )
+        try:
+            # Dispatch to Celery task with tier routing, passing persona_id and coin details
+            dispatch_chat_request.apply_async(
+                args=[
+                    str(user.id),
+                    user_text,
+                ],
+                kwargs={
+                    "user_tier": user_tier,
+                    "persona": persona,
+                    "emotion": emotion,
+                    "persona_id": str(persona_obj.id),
+                    "coin_group_id": coin_group_id,
+                    "coin_lang": lang,
+                    "coin_cost": cost,
+                },
+            )
+        except Exception as e:
+            # Fallback refund if Celery dispatch fails immediately (e.g., broker connection error)
+            if coin_group_id:
+                try:
+                    CoinService.refund_coins(user, lang, cost, reference_id=coin_group_id, note='Refund: dispatch Celery failed')
+                    logger.info(f"Refunded {cost} coins for failed Celery dispatch (group={coin_group_id})")
+                except Exception as refund_err:
+                    logger.error(f"CRITICAL: Failed to refund coins: {refund_err}")
+            raise e
 
         return Response(
             {
@@ -159,6 +192,7 @@ class XiaoyueChatSendView(APIView):
             },
             status=status.HTTP_202_ACCEPTED,
         )
+
 
 
 class XiaoyueChatSulkingView(APIView):
@@ -311,6 +345,25 @@ class XiaoyueChatPersonaView(APIView):
                 {"detail": "Thiếu thông tin bắt buộc: user_name, gender, birth_year, context_setting."},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+        # ── Trừ coin trước khi tạo persona ──
+        from apps.gamification.coin_service import CoinService, InsufficientCoinsError
+        user_tier = getattr(user.subscription, 'tier', 'Free') if hasattr(user, 'subscription') else 'Free'
+        config = CoinService.get_coin_config(user_tier)
+        cost = config.chat_create_cost if config else 5
+        
+        try:
+            CoinService.spend_coins(
+                user, learning_language, cost,
+                'SPEND_CHAT_CREATE',
+                note=f'Tạo gia sư ({learning_language})'
+            )
+        except InsufficientCoinsError:
+            lang_name = "Linh Thạch" if learning_language == "zh" else "Coin"
+            return Response(
+                {"detail": f"Không đủ {lang_name} để tạo gia sư. Hãy học thêm flashcard!"},
+                status=status.HTTP_403_FORBIDDEN
+            )
             
         try:
             persona_dict = generate_random_persona(
@@ -367,11 +420,15 @@ class XiaoyueChatPersonaView(APIView):
             }
             return Response(result, status=status.HTTP_201_CREATED)
         except ValueError:
+            # Fallback refund
+            CoinService.refund_coins(user, learning_language, cost, note='Refund: tạo gia sư lỗi năm sinh')
             return Response(
                 {"detail": "Năm sinh phải là số nguyên hợp lệ."},
                 status=status.HTTP_400_BAD_REQUEST
             )
         except Exception as e:
+            # Fallback refund
+            CoinService.refund_coins(user, learning_language, cost, note='Refund: tạo gia sư thất bại')
             logger.error(f"Failed to generate and save persona for user {user.id}: {e}", exc_info=True)
             return Response(
                 {"detail": "Lỗi khi tạo ngẫu nhiên thông tin gia sư."},

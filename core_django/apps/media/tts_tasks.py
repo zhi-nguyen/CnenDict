@@ -9,9 +9,20 @@ from core_project.ws_utils import ws_notify
 
 logger = logging.getLogger(__name__)
 
-@shared_task(bind=True, max_retries=2, default_retry_delay=5)
+@shared_task(
+    bind=True,
+    max_retries=3,
+    retry_backoff=True,         # Exponential backoff: ~2s, ~4s, ~8s between retries
+    retry_backoff_max=60,       # Cap max delay at 60 seconds
+    retry_jitter=True           # Add random jitter to prevent thundering herd on recovery
+)
 def generate_tts_audio_task(self, task_id, user_id, text, voice, cache_key, **kwargs):
     logger.info(f"Starting async TTS task {task_id} for user {user_id}. Text: {text[:20]}...")
+
+    # Compute hash once at the top so the finally block always has access
+    text_hash = hashlib.md5(f"{text}:{voice}".encode('utf-8')).hexdigest()
+    pending_key = f"tts:pending:{text_hash}"
+
     try:
         # 1. Fetch audio binary from internal TTS service
         tts_internal_url = f"http://tts-service:8002/api/v1/tts?text={requests.utils.quote(text)}&voice={voice}"
@@ -19,7 +30,6 @@ def generate_tts_audio_task(self, task_id, user_id, text, voice, cache_key, **kw
         response.raise_for_status()
 
         # 2. Save file to storage
-        text_hash = hashlib.md5(f"{text}:{voice}".encode('utf-8')).hexdigest()
         filename = f"tts/{text_hash}.mp3"
         
         # Save to default storage (local media volume or GCS bucket depending on django config)
@@ -58,3 +68,9 @@ def generate_tts_audio_task(self, task_id, user_id, text, voice, cache_key, **kw
             persist=False,
         )
         raise self.retry(exc=exc)
+
+    finally:
+        # Always clear pending key to unblock future requests for the same text+voice,
+        # regardless of success, failure, or max retries exhausted.
+        cache.delete(pending_key)
+

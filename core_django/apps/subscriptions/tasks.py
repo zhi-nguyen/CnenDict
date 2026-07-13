@@ -38,9 +38,15 @@ def process_expired_subscriptions():
                 logger.info(f"Subscription expired and downgraded to Free for user {locked_sub.user.username}: {old_tier} -> Free")
 
                 locked_sub.save()
+
+                # Reset ví coin của user về mức cap của Free
+                from apps.gamification.coin_service import CoinService
+                CoinService.apply_tier_reset(locked_sub.user, 'Free')
+
                 count += 1
 
     return f"Processed {count} expired subscriptions."
+
 
 
 @shared_task
