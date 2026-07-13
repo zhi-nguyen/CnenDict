@@ -1,6 +1,6 @@
 from rest_framework import generics, views, status
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.utils import timezone
 from .models import UserStreak, DailyTarget, StudyHistory, DailyActivity
 from .serializers import UserStreakSerializer, DailyTargetSerializer, StudyHistorySerializer, DailyActivitySerializer
@@ -282,6 +282,24 @@ class CoinConfigView(views.APIView):
             "coin_price_vnd": 500,
             "purchase_presets": [10, 20, 50, 100]
         }, status=status.HTTP_200_OK)
+
+
+class AllCoinConfigsView(views.APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        configs = CoinConfig.objects.all().order_by('tier')
+        data = []
+        for config in configs:
+            data.append({
+                "tier": config.tier,
+                "weekly_refill_cap": config.weekly_refill_cap,
+                "words_per_coin": config.words_per_coin,
+                "daily_free_earn_limit": config.daily_free_earn_limit,
+                "chat_create_cost": config.chat_create_cost,
+                "chat_message_cost": config.chat_message_cost,
+            })
+        return Response(data, status=status.HTTP_200_OK)
 
 
 class CoinPurchaseStatusView(views.APIView):
