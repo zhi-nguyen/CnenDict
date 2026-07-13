@@ -87,7 +87,7 @@ class StudyHistoryLogView(views.APIView):
 
 from apps.dictionary_zh.views import StandardResultsSetPagination
 from apps.flashcard_exercises.models import FlashcardExercise
-from .models import StudySession, StudySessionCard, CoinWallet, CoinTransaction, CoinPurchaseOrder
+from .models import StudySession, StudySessionCard, CoinWallet, CoinTransaction, CoinPurchaseOrder, CoinConfig
 from .serializers import StudySessionSerializer, StudySessionCardSerializer, CoinWalletSerializer, CoinTransactionSerializer
 from .coin_service import CoinService
 import uuid
