@@ -9,6 +9,7 @@ from .views import (
     CookieTokenLogoutView,
     FirebaseLoginView,
 )
+from .azure_speech import AzureSpeechTokenView
 
 urlpatterns = [
     path('register/', UserRegistrationView.as_view(), name='user_register'),
@@ -19,6 +20,7 @@ urlpatterns = [
     path('token/logout/', CookieTokenLogoutView.as_view(), name='token_logout'),
     path('firebase-login/', FirebaseLoginView.as_view(), name='firebase_login'),
     path('ws-token/', WsTokenView.as_view(), name='ws_token'),
+    path('azure-speech-token/', AzureSpeechTokenView.as_view(), name='azure_speech_token'),
 ]
 
 

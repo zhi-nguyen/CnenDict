@@ -189,6 +189,11 @@ def dispatch_chat_request(user_id, user_text, user_role=None, user_level=None, t
             "sad_current": emotion.get("sad", 0.1),
             
             "past_context": past_context,
+            
+            # Coin configuration for refund fallback
+            "coin_group_id": coin_group_id,
+            "coin_lang": coin_lang,
+            "coin_cost": coin_cost,
         }
         
         redis_client.publish(channel, json.dumps(payload, ensure_ascii=False))
@@ -473,4 +478,27 @@ def generate_persona_avatar_task(persona_id: str) -> str:
         logger.error(f"Failed to call image service for persona {persona_id}: {e}", exc_info=True)
 
     return ""
+
+
+@shared_task(queue='queue_chat')
+def refund_chat_coins(user_id: str, coin_lang: str, coin_cost: int, coin_group_id: str, note: str = "Refund"):
+    """
+    Celery task to refund coins/linh thach to the user when AI processing fails.
+    """
+    try:
+        from apps.gamification.coin_service import CoinService
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        user = User.objects.get(id=user_id)
+        CoinService.refund_coins(
+            user, coin_lang, coin_cost,
+            reference_id=coin_group_id,
+            note=note
+        )
+        logger.info(f"Successfully refunded {coin_cost} {coin_lang} to user {user_id} (group={coin_group_id})")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to refund chat coins for user {user_id}: {e}", exc_info=True)
+        return False
+
 

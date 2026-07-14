@@ -81,7 +81,20 @@ class ChineseTutorAgent:
     def __init__(self):
         """Initialize the Gemini client using Vertex AI."""
         logger.info(f"Initializing Gemini Client with Vertex AI for model: {settings.GEMINI_MODEL_NAME}")
-        self.client = genai.Client(vertexai=True, location="global")
+        
+        # Configure HttpOptions for Vertex AI Priority PayGo routing
+        http_options = types.HttpOptions(
+            headers={
+                "X-Vertex-AI-LLM-Request-Type": "shared",
+                "X-Vertex-AI-LLM-Shared-Request-Type": "priority"
+            }
+        )
+        
+        self.client = genai.Client(
+            vertexai=True, 
+            location="global",
+            http_options=http_options
+        )
         self.model_name = settings.GEMINI_MODEL_NAME
     
     def _format_conversation_history(

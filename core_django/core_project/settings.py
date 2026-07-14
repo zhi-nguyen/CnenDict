@@ -250,3 +250,4 @@ EMBEDDING_DIMENSIONS = 768  # text-embedding-004 output dimensions
 CHAT_SUMMARY_CYCLE = int(os.environ.get('CHAT_SUMMARY_CYCLE', '6'))
 CHAT_RAG_THRESHOLD = int(os.environ.get('CHAT_RAG_THRESHOLD', '10'))
 CHAT_RAG_TOP_K = int(os.environ.get('CHAT_RAG_TOP_K', '3'))
+AZURE_SPEECH_CONFIDENCE_THRESHOLD = float(os.environ.get('AZURE_SPEECH_CONFIDENCE_THRESHOLD','0.6'))
