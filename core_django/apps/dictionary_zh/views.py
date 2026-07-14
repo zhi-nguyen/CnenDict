@@ -200,9 +200,12 @@ class ZhWordSearchView(generics.ListAPIView):
             #     filter_q |= Q(word__in=substrings)
                 
             queryset = queryset.filter(filter_q)
-            has_example_match = Exists(
-                ZhExample.objects.filter(word_id=OuterRef('pk'), search_vector=query_obj)
-            )
+            if len(cleaned_query) > 2:
+                has_example_match = Exists(
+                    ZhExample.objects.filter(word_id=OuterRef('pk'), search_vector=query_obj)
+                )
+            else:
+                has_example_match = Exists(ZhExample.objects.none())
             
             # Match levels for Chinese: 1, 3, 7, 8
             queryset = queryset.annotate(
