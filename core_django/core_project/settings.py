@@ -47,6 +47,8 @@ INSTALLED_APPS = [
     'apps.media',
     'apps.reports',
     'apps.xiaoyue_chat',
+    'apps.community',
+    'apps.leaderboard',
     'rest_framework_simplejwt',
 ]
 
@@ -183,6 +185,14 @@ CELERY_BEAT_SCHEDULE = {
     'expire-pending-payment-orders': {
         'task': 'apps.subscriptions.tasks.expire_pending_payment_orders',
         'schedule': crontab(minute='*/5'),  # Every 5 minutes
+    },
+    'refresh-leaderboards-every-4h': {
+        'task': 'apps.leaderboard.tasks.refresh_all_leaderboards',
+        'schedule': crontab(minute=0, hour='*/4'),
+    },
+    'cleanup-old-leaderboard-snapshots': {
+        'task': 'apps.leaderboard.tasks.cleanup_old_snapshots',
+        'schedule': crontab(hour=1, minute=30),
     },
 }
 

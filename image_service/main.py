@@ -3,12 +3,15 @@ import json
 import logging
 import asyncio
 import shutil
-from fastapi import FastAPI, Query, HTTPException, BackgroundTasks
+import io
+import jwt
+from fastapi import FastAPI, Query, HTTPException, BackgroundTasks, UploadFile, Form, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from google.cloud import storage
 from google import genai
 from google.genai import types
+from uuid import uuid4
 
 # Configure Logging
 LOG_DIR = "/app/logs"
@@ -271,3 +274,110 @@ async def delete_image(req: DeleteRequest):
     except Exception as e:
         logger.error(f"❌ Failed to delete GCS image: {e}")
         raise HTTPException(status_code=500, detail=f"GCS deletion failed: {str(e)}")
+
+
+# --- JWT Verification Dependency ---
+async def verify_community_jwt(request: Request) -> dict:
+    """Xác thực JWT từ header Authorization.
+    Sử dụng JWT_SECRET_KEY chung với Django (shared env var)."""
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid token")
+    token = auth.split(" ", 1)[1]
+    try:
+        secret_key = os.environ.get("JWT_SECRET_KEY", "replace-this-in-production")
+        payload = jwt.decode(token, secret_key, algorithms=["HS256"])
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+
+@app.post("/api/v1/image/community/upload")
+async def upload_community_image(
+    file: UploadFile,
+    lang: str = Form("zh"),
+    jwt_payload: dict = Depends(verify_community_jwt),
+):
+    user_id = jwt_payload.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid token payload")
+
+    # ── Bước 1: Validate kích thước và định dạng tệp ──
+    if file.size and file.size > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Kích thước tệp vượt quá 5MB")
+    
+    ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp"}
+    if file.content_type not in ALLOWED_TYPES:
+        raise HTTPException(status_code=400, detail=f"Định dạng không hỗ trợ: {file.content_type}")
+
+    # ── Bước 2: Đọc file bất đồng bộ trên Event Loop chính ──
+    try:
+        file_bytes = await file.read()
+    except Exception as e:
+        logger.error(f"❌ Failed to read upload file: {e}")
+        raise HTTPException(status_code=400, detail="Không thể đọc tệp tin")
+
+    if len(file_bytes) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Kích thước tệp vượt quá 5MB")
+
+    # ── Bước 3: Xử lý CPU-bound Pillow (Resize & WebP Conversion) trên Thread Pool ──
+    def process_image_sync(data: bytes) -> bytes:
+        from PIL import Image
+        img = Image.open(io.BytesIO(data))
+        # Loại bỏ EXIF orientation metadata và đảm bảo định dạng RGB
+        img = img.convert("RGB")
+        img.thumbnail((1080, 1080), Image.Resampling.LANCZOS)
+
+        buffer = io.BytesIO()
+        img.save(buffer, format="WEBP", quality=85)
+        return buffer.getvalue()
+
+    try:
+        image_bytes = await asyncio.to_thread(process_image_sync, file_bytes)
+    except Exception as e:
+        logger.error(f"❌ Pillow image processing failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Xử lý ảnh thất bại: {str(e)}")
+
+    # ── Bước 4: Upload GCS vào thư mục TEMP ──
+    bucket = get_gcs_bucket()
+    if not bucket:
+        if IS_DEBUG:
+            file_id = uuid4().hex
+            filename = f"community_temp_{file_id}.webp"
+            local_path = os.path.join(CACHE_DIR, filename)
+            try:
+                with open(local_path, "wb") as f:
+                    f.write(image_bytes)
+                logger.info(f"🧪 [MOCK] Saved community temp image locally: {local_path}")
+                mock_url = f"http://localhost:8003/cache/{filename}"
+                return {
+                    "image_url": mock_url,
+                    "temp_path": f"community/temp/{user_id}/{file_id}.webp"
+                }
+            except Exception as e:
+                logger.error(f"❌ Mock save failed: {e}")
+                raise HTTPException(status_code=500, detail="Mock save failed")
+        
+        raise HTTPException(status_code=500, detail="GCS Bucket is not configured or authenticated")
+
+    file_id = uuid4().hex
+    temp_blob_name = f"community/temp/{user_id}/{file_id}.webp"
+
+    def upload_to_gcs_sync(blob_name: str, data: bytes) -> str:
+        blob = bucket.blob(blob_name)
+        blob.upload_from_string(data, content_type="image/webp")
+        return blob.public_url
+
+    try:
+        public_url = await asyncio.to_thread(upload_to_gcs_sync, temp_blob_name, image_bytes)
+        logger.info(f"☁️ Uploaded community temp image to GCS: {temp_blob_name}")
+        return {
+            "image_url": public_url,
+            "temp_path": temp_blob_name
+        }
+    except Exception as e:
+        logger.error(f"❌ GCS upload failed for temp image: {e}")
+        raise HTTPException(status_code=500, detail=f"Upload GCS thất bại: {str(e)}")
+

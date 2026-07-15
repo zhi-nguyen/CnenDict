@@ -18,6 +18,8 @@ urlpatterns = [
     path('api/v1/media/', include('apps.media.urls')),
     path('api/v1/reports/', include('apps.reports.urls')),
     path('api/v1/xiaoyue-chat/', include('apps.xiaoyue_chat.urls')),
+    path('api/v1/community/', include('apps.community.urls')),
+    path('api/v1/leaderboard/', include('apps.leaderboard.urls')),
 ]
 
 if settings.DEBUG:
