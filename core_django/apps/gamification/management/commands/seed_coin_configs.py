@@ -21,6 +21,12 @@ COIN_CONFIG_SEED = [
         'daily_free_earn_limit': 20,
         'chat_create_cost': 5,
         'chat_message_cost': 1,
+        'writing_base_cost_zh': 1,
+        'writing_increment_cost_zh': 1,
+        'writing_base_cost_en': 1,
+        'writing_increment_cost_en': 1,
+        'pdf_normal_export_cost': 2,
+        'pdf_stroke_export_cost': 3,
     },
     {
         'tier': 'Plus',
@@ -31,6 +37,12 @@ COIN_CONFIG_SEED = [
         'daily_free_earn_limit': 50,
         'chat_create_cost': 3,
         'chat_message_cost': 1,
+        'writing_base_cost_zh': 0,
+        'writing_increment_cost_zh': 0,
+        'writing_base_cost_en': 0,
+        'writing_increment_cost_en': 0,
+        'pdf_normal_export_cost': 2,
+        'pdf_stroke_export_cost': 3,
     },
     {
         'tier': 'Pro',
@@ -41,6 +53,12 @@ COIN_CONFIG_SEED = [
         'daily_free_earn_limit': 100,
         'chat_create_cost': 2,
         'chat_message_cost': 1,
+        'writing_base_cost_zh': 0,
+        'writing_increment_cost_zh': 0,
+        'writing_base_cost_en': 0,
+        'writing_increment_cost_en': 0,
+        'pdf_normal_export_cost': 2,
+        'pdf_stroke_export_cost': 3,
     },
     {
         'tier': 'Premium',
@@ -51,6 +69,12 @@ COIN_CONFIG_SEED = [
         'daily_free_earn_limit': 0,  # 0 = Không giới hạn
         'chat_create_cost': 1,
         'chat_message_cost': 0,  # Premium chat miễn phí
+        'writing_base_cost_zh': 0,
+        'writing_increment_cost_zh': 0,
+        'writing_base_cost_en': 0,
+        'writing_increment_cost_en': 0,
+        'pdf_normal_export_cost': 2,
+        'pdf_stroke_export_cost': 3,
     },
 ]
 

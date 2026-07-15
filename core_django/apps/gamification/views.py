@@ -272,6 +272,12 @@ class CoinConfigView(views.APIView):
         words_per_coin = config.words_per_coin if config else 5
         chat_create_cost = config.chat_create_cost if config else 5
         chat_message_cost = config.chat_message_cost if config else 1
+        writing_base_cost_zh = config.writing_base_cost_zh if config else 1
+        writing_increment_cost_zh = config.writing_increment_cost_zh if config else 1
+        writing_base_cost_en = config.writing_base_cost_en if config else 1
+        writing_increment_cost_en = config.writing_increment_cost_en if config else 1
+        pdf_normal_export_cost = config.pdf_normal_export_cost if config else 2
+        pdf_stroke_export_cost = config.pdf_stroke_export_cost if config else 3
         
         return Response({
             "tier": user_tier,
@@ -279,6 +285,12 @@ class CoinConfigView(views.APIView):
             "words_per_coin": words_per_coin,
             "chat_create_cost": chat_create_cost,
             "chat_message_cost": chat_message_cost,
+            "writing_base_cost_zh": writing_base_cost_zh,
+            "writing_increment_cost_zh": writing_increment_cost_zh,
+            "writing_base_cost_en": writing_base_cost_en,
+            "writing_increment_cost_en": writing_increment_cost_en,
+            "pdf_normal_export_cost": pdf_normal_export_cost,
+            "pdf_stroke_export_cost": pdf_stroke_export_cost,
             "coin_price_vnd": 500,
             "purchase_presets": [10, 20, 50, 100]
         }, status=status.HTTP_200_OK)
@@ -298,6 +310,12 @@ class AllCoinConfigsView(views.APIView):
                 "daily_free_earn_limit": config.daily_free_earn_limit,
                 "chat_create_cost": config.chat_create_cost,
                 "chat_message_cost": config.chat_message_cost,
+                "writing_base_cost_zh": config.writing_base_cost_zh,
+                "writing_increment_cost_zh": config.writing_increment_cost_zh,
+                "writing_base_cost_en": config.writing_base_cost_en,
+                "writing_increment_cost_en": config.writing_increment_cost_en,
+                "pdf_normal_export_cost": config.pdf_normal_export_cost,
+                "pdf_stroke_export_cost": config.pdf_stroke_export_cost,
             })
         return Response(data, status=status.HTTP_200_OK)
 

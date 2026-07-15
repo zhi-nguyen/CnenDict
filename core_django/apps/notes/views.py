@@ -339,21 +339,45 @@ class NotebookExportPDFView(APIView):
         today_str = timezone.localtime(timezone.now()).date().isoformat()
         cache_key = f"pdf_export:count:{request.user.id}:{today_str}"
 
-        # Atomic increment check
         try:
-            current_count = cache.incr(cache_key)
-        except ValueError:
-            # Key does not exist, initialize it with remaining seconds until midnight
-            cache.set(cache_key, 1, timeout=get_seconds_until_midnight())
-            current_count = 1
+            current_count = int(cache.get(cache_key) or 0)
+        except (ValueError, TypeError):
+            current_count = 0
 
-        if current_count > daily_limit:
-            # Over the limit: decrement and return 429
-            cache.decr(cache_key)
-            return Response(
-                {"detail": f"Bạn đã vượt quá giới hạn xuất PDF trong ngày ({daily_limit} lần/ngày cho gói {tier})."},
-                status=status.HTTP_429_TOO_MANY_REQUESTS
-            )
+        get_param = lambda key, default: request.data.get(key, request.query_params.get(key, default))
+        stroke_by_stroke = str(get_param('stroke_by_stroke', 'false')).lower() == 'true'
+
+        if current_count < daily_limit:
+            # Under the limit: increment Redis count (free export)
+            try:
+                cache.incr(cache_key)
+            except ValueError:
+                cache.set(cache_key, 1, timeout=get_seconds_until_midnight())
+        else:
+            # Over the limit: paid export
+            from apps.gamification.coin_service import CoinService, InsufficientCoinsError
+            coin_config = CoinService.get_coin_config(tier)
+            cost = (coin_config.pdf_stroke_export_cost if coin_config else 3) if stroke_by_stroke else (coin_config.pdf_normal_export_cost if coin_config else 2)
+
+            try:
+                CoinService.spend_coins(
+                    user=request.user,
+                    lang='zh',
+                    amount=cost,
+                    transaction_type='SPEND_PDF_EXPORT',
+                    note=f"Xuất PDF quá hạn: {notebook.name}"
+                )
+            except InsufficientCoinsError:
+                return Response(
+                    {"detail": f"Đã quá hạn mức xuất PDF miễn phí hàng ngày ({daily_limit} lần) và không đủ Linh Thạch để thanh toán phí xuất thêm (Cần {cost} Linh Thạch)."},
+                    status=status.HTTP_402_PAYMENT_REQUIRED
+                )
+
+            # Deduct points success -> increment Redis count
+            try:
+                cache.incr(cache_key)
+            except ValueError:
+                cache.set(cache_key, current_count + 1, timeout=get_seconds_until_midnight())
 
         # 3. Định dạng dữ liệu payload cho microservice
         words_data = []
@@ -586,9 +610,17 @@ class PDFExportLimitsView(APIView):
         # Get current usage from Redis
         today_str = timezone.localtime(timezone.now()).date().isoformat()
         cache_key = f"pdf_export:count:{request.user.id}:{today_str}"
-        current_count = cache.get(cache_key) or 0
+        try:
+            current_count = int(cache.get(cache_key) or 0)
+        except (ValueError, TypeError):
+            current_count = 0
 
         remaining = max(0, daily_limit - current_count)
+
+        from apps.gamification.coin_service import CoinService
+        coin_config = CoinService.get_coin_config(tier)
+        pdf_normal_export_cost = coin_config.pdf_normal_export_cost if coin_config else 2
+        pdf_stroke_export_cost = coin_config.pdf_stroke_export_cost if coin_config else 3
 
         return Response({
             'tier': tier,
@@ -596,6 +628,8 @@ class PDFExportLimitsView(APIView):
             'current_count': current_count,
             'remaining_count': remaining,
             'max_words': max_words,
+            'pdf_normal_export_cost': pdf_normal_export_cost,
+            'pdf_stroke_export_cost': pdf_stroke_export_cost,
         }, status=status.HTTP_200_OK)
 
 

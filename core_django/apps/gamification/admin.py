@@ -29,7 +29,10 @@ from .models import CoinWallet, CoinTransaction, CoinConfig, StudySession, Study
 @admin.register(CoinConfig)
 class CoinConfigAdmin(admin.ModelAdmin):
     list_display = ('tier', 'weekly_refill_cap', 'initial_coins_zh', 'initial_coins_en',
-                    'words_per_coin', 'daily_free_earn_limit', 'chat_create_cost', 'chat_message_cost')
+                    'words_per_coin', 'daily_free_earn_limit', 'chat_create_cost', 'chat_message_cost',
+                    'writing_base_cost_zh', 'writing_increment_cost_zh',
+                    'writing_base_cost_en', 'writing_increment_cost_en',
+                    'pdf_normal_export_cost', 'pdf_stroke_export_cost')
 
 @admin.register(CoinWallet)
 class CoinWalletAdmin(admin.ModelAdmin):

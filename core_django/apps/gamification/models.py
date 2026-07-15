@@ -84,6 +84,8 @@ class CoinTransaction(models.Model):
         ('ADMIN_ADJUST', 'Admin điều chỉnh'),
         ('PURCHASE', 'Mua bằng tiền'),
         ('TIER_RESET', 'Reset khi hết hạn subscription'),
+        ('SPEND_WRITING_PRACTICE', 'Luyện viết AI'),
+        ('SPEND_PDF_EXPORT', 'Xuất PDF quá hạn mức'),
     ]
     BALANCE_TYPES = [('paid', 'Paid'), ('free', 'Free')]
 
@@ -128,6 +130,12 @@ class CoinConfig(models.Model):
     daily_free_earn_limit = models.IntegerField(default=50, help_text="Giới hạn số coin free tối đa có thể kiếm mỗi ngày (0 = không giới hạn)")
     chat_create_cost = models.IntegerField(default=5, help_text="Chi phí tạo AI Persona")
     chat_message_cost = models.IntegerField(default=1, help_text="Chi phí gửi tin nhắn AI")
+    writing_base_cost_zh = models.IntegerField(default=1, help_text="Chi phí Linh Thạch nền cho Luyện Viết tiếng Trung")
+    writing_increment_cost_zh = models.IntegerField(default=1, help_text="Chi phí Linh Thạch tăng thêm cho mỗi 50 chữ tiếp theo")
+    writing_base_cost_en = models.IntegerField(default=1, help_text="Chi phí Coin nền cho Luyện Viết tiếng Anh")
+    writing_increment_cost_en = models.IntegerField(default=1, help_text="Chi phí Coin tăng thêm cho mỗi 50 từ tiếp theo")
+    pdf_normal_export_cost = models.IntegerField(default=2, help_text="Chi phí Linh Thạch cho xuất PDF thường khi quá hạn")
+    pdf_stroke_export_cost = models.IntegerField(default=3, help_text="Chi phí Linh Thạch cho xuất PDF phân rã nét khi quá hạn")
 
     def __str__(self):
         return f"CoinConfig({self.tier}): refill={self.weekly_refill_cap}"
