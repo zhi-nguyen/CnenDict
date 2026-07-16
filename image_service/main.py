@@ -6,6 +6,7 @@ import shutil
 import io
 import jwt
 from fastapi import FastAPI, Query, HTTPException, BackgroundTasks, UploadFile, Form, Depends, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from google.cloud import storage
@@ -29,6 +30,19 @@ logging.basicConfig(
 logger = logging.getLogger("image_service")
 
 app = FastAPI(title="XiaoYueDict Standalone Image Service", version="1.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://www.cnendict.xyz",
+        "https://cnendict.xyz",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Directories
 CACHE_DIR = "/app/cache"
@@ -341,7 +355,7 @@ async def upload_community_image(
         raise HTTPException(status_code=500, detail=f"Xử lý ảnh thất bại: {str(e)}")
 
     # ── Bước 4: Upload GCS vào thư mục TEMP ──
-    bucket = get_gcs_bucket()
+    bucket = bucket_instance
     if not bucket:
         if IS_DEBUG:
             file_id = uuid4().hex
