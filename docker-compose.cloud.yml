@@ -320,6 +320,8 @@ services:
     environment:
       - GOOGLE_APPLICATION_CREDENTIALS=/app/key.json
       - GS_BUCKET_NAME=${GS_BUCKET_NAME:-cnen-bucket}
+    env_file:
+      - .env
     restart: unless-stopped
     networks:
       - xiaoyue-network
