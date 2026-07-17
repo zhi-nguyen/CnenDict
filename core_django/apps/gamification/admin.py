@@ -39,7 +39,7 @@ class CoinConfigAdmin(admin.ModelAdmin):
 
 @admin.register(CoinWallet)
 class CoinWalletAdmin(admin.ModelAdmin):
-    list_display = ('user', 'lang', 'paid_balance', 'free_balance', 'total_balance', 'updated_at')
+    list_display = ('user', 'lang', 'paid_balance', 'free_balance', 'shop_balance', 'total_balance', 'updated_at')
     list_filter = ('lang',)
     search_fields = ('user__username', 'user__email')
     readonly_fields = ('id',)
@@ -91,8 +91,8 @@ class EXPTransactionAdmin(admin.ModelAdmin):
 
 @admin.register(RewardItem)
 class RewardItemAdmin(admin.ModelAdmin):
-    list_display = ('name', 'reward_type', 'rarity', 'is_active', 'created_at')
-    list_filter = ('reward_type', 'rarity', 'is_active')
+    list_display = ('name', 'reward_type', 'rarity', 'is_sellable', 'price_free', 'price_paid', 'price_shop', 'is_active', 'created_at')
+    list_filter = ('reward_type', 'rarity', 'is_sellable', 'is_active')
     search_fields = ('name', 'title_text')
 
 @admin.register(RewardRule)

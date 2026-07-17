@@ -3,7 +3,8 @@ from .views import (
     StreakView, TargetView, StudyHistoryLogView, ActivityHistoryView, GamificationDashboardView,
     CreateStudySessionView, FinishStudySessionView, WalletBalanceView, InitiateCoinPurchaseView,
     CoinConfigView, CoinPurchaseStatusView, AllCoinConfigsView,
-    LevelInfoView, UserInventoryView, EquipInventoryItemView, RewardsPreviewView
+    LevelInfoView, UserInventoryView, EquipInventoryItemView, RewardsPreviewView,
+    ShopItemListView, PurchaseItemView
 )
 
 urlpatterns = [
@@ -26,6 +27,10 @@ urlpatterns = [
     path('inventory/', UserInventoryView.as_view(), name='user-inventory'),
     path('inventory/<uuid:item_id>/equip/', EquipInventoryItemView.as_view(), name='equip-inventory-item'),
     path('rewards/preview/', RewardsPreviewView.as_view(), name='rewards-preview'),
+    
+    # Shop endpoints
+    path('shop/items/', ShopItemListView.as_view(), name='shop-items'),
+    path('shop/purchase/', PurchaseItemView.as_view(), name='shop-purchase'),
 ]
 
 

@@ -44,13 +44,13 @@ class StudySessionSerializer(serializers.ModelSerializer):
 class CoinWalletSerializer(serializers.ModelSerializer):
     class Meta:
         model = CoinWallet
-        fields = ['lang', 'paid_balance', 'free_balance', 'total_balance', 'updated_at']
+        fields = ['lang', 'paid_balance', 'free_balance', 'shop_balance', 'total_balance', 'updated_at']
 
 
 class CoinTransactionSerializer(serializers.ModelSerializer):
     class Meta:
         model = CoinTransaction
-        fields = ['id', 'group_id', 'transaction_type', 'balance_type', 'amount', 'paid_balance_after', 'free_balance_after', 'reference_id', 'note', 'created_at']
+        fields = ['id', 'group_id', 'transaction_type', 'balance_type', 'amount', 'paid_balance_after', 'free_balance_after', 'shop_balance_after', 'reference_id', 'note', 'created_at']
 
 
 class UserLanguageLevelSerializer(serializers.ModelSerializer):
@@ -74,7 +74,7 @@ class EXPTransactionSerializer(serializers.ModelSerializer):
 class RewardItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = RewardItem
-        fields = ['id', 'name', 'reward_type', 'description', 'image_url', 'title_text', 'rarity', 'ui_metadata']
+        fields = ['id', 'name', 'reward_type', 'description', 'image_url', 'title_text', 'rarity', 'ui_metadata', 'is_sellable', 'price_free', 'price_paid', 'price_shop']
 
 
 class UserInventorySerializer(serializers.ModelSerializer):

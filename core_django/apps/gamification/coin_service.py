@@ -43,6 +43,7 @@ class CoinService:
         return {
             'paid': wallet.paid_balance,
             'free': wallet.free_balance,
+            'shop': wallet.shop_balance,
             'total': wallet.total_balance,
         }
 
@@ -128,6 +129,7 @@ class CoinService:
             amount=coins_to_add,
             paid_balance_after=wallet.paid_balance,
             free_balance_after=wallet.free_balance,
+            shop_balance_after=wallet.shop_balance,
             reference_id=reference_id, note=note,
         )
 
@@ -195,6 +197,7 @@ class CoinService:
                 amount=-deduct_paid,
                 paid_balance_after=wallet.paid_balance,
                 free_balance_after=wallet.free_balance,
+                shop_balance_after=wallet.shop_balance,
                 reference_id=reference_id, note=note,
             ))
 
@@ -206,6 +209,7 @@ class CoinService:
                 amount=-deduct_free,
                 paid_balance_after=wallet.paid_balance,
                 free_balance_after=wallet.free_balance,
+                shop_balance_after=wallet.shop_balance,
                 reference_id=reference_id, note=note,
             ))
 
@@ -227,6 +231,7 @@ class CoinService:
             amount=amount,
             paid_balance_after=wallet.paid_balance,
             free_balance_after=wallet.free_balance,
+            shop_balance_after=wallet.shop_balance,
             reference_id=reference_id, note=note,
         )
 
@@ -258,6 +263,7 @@ class CoinService:
             amount=refill_amount,
             paid_balance_after=wallet.paid_balance,
             free_balance_after=wallet.free_balance,
+            shop_balance_after=wallet.shop_balance,
             note=f'Weekly refill for {tier} (cap={config.weekly_refill_cap})',
         )
 
@@ -286,6 +292,7 @@ class CoinService:
                 amount=cap - old_paid,
                 paid_balance_after=wallet.paid_balance,
                 free_balance_after=wallet.free_balance,
+                shop_balance_after=wallet.shop_balance,
                 note=f'Tier reset to {new_tier} (paid: {old_paid} → {cap})',
             )
 
@@ -300,10 +307,11 @@ class CoinService:
     @staticmethod
     @transaction.atomic
     def add_purchased_coins(user, lang, amount, reference_id='') -> CoinTransaction:
-        """Cộng coin mua bằng tiền → paid_balance."""
+        """Cộng coin mua bằng tiền → paid_balance và cộng shop_balance."""
         wallet = CoinService._get_wallet_for_update(user, lang)
         wallet.paid_balance += amount
-        wallet.save(update_fields=['paid_balance', 'updated_at'])
+        wallet.shop_balance += amount
+        wallet.save(update_fields=['paid_balance', 'shop_balance', 'updated_at'])
 
         return CoinTransaction.objects.create(
             wallet=wallet, user=user,
@@ -311,6 +319,7 @@ class CoinService:
             amount=amount,
             paid_balance_after=wallet.paid_balance,
             free_balance_after=wallet.free_balance,
+            shop_balance_after=wallet.shop_balance,
             reference_id=reference_id,
             note=f'Purchased {amount} coins',
         )
@@ -351,6 +360,7 @@ class CoinService:
                 amount=diff,
                 paid_balance_after=wallet.paid_balance,
                 free_balance_after=wallet.free_balance,
+                shop_balance_after=wallet.shop_balance,
                 note=f"Cấp Linh Thạch/Coin khởi tạo cho tài khoản mới (Gói {tier})"
             )
             transactions.append(txn)

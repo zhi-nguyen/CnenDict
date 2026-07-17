@@ -95,7 +95,7 @@ from .serializers import (
     StudySessionSerializer, StudySessionCardSerializer, CoinWalletSerializer, CoinTransactionSerializer,
     UserLanguageLevelSerializer, EXPTransactionSerializer, RewardItemSerializer, UserInventorySerializer
 )
-from .coin_service import CoinService
+from .coin_service import CoinService, InsufficientCoinsError
 from .leveling_service import LevelingService
 import uuid
 
@@ -484,12 +484,13 @@ class InitiateCoinPurchaseView(views.APIView):
         account_number = get_sepay_account_number()
         account_name = get_sepay_account_name()
 
+        import urllib.parse
         qr_url = (
             f"https://img.vietqr.io/image/"
             f"{bank_code}-{account_number}-compact2.png"
             f"?amount={int(order.price)}"
-            f"&addInfo={order.transfer_content}"
-            f"&accountName={account_name}"
+            f"&addInfo={urllib.parse.quote(order.transfer_content)}"
+            f"&accountName={urllib.parse.quote(account_name)}"
         )
 
         return Response({
@@ -640,5 +641,67 @@ class RewardsPreviewView(views.APIView):
                 }
             })
         return Response(data, status=status.HTTP_200_OK)
+
+
+from django.utils.decorators import method_decorator
+from django.views.decorators.cache import cache_page
+
+@method_decorator(cache_page(60 * 10), name='dispatch')
+class ShopItemListView(generics.ListAPIView):
+    """
+    GET /api/v1/gamification/shop/items/
+    Trả về danh sách các vật phẩm active và is_sellable=True.
+    """
+    serializer_class = RewardItemSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return RewardItem.objects.filter(is_active=True, is_sellable=True).order_by('rarity', 'name')
+
+
+class PurchaseItemView(views.APIView):
+    """
+    POST /api/v1/gamification/shop/purchase/
+    Body: { "reward_item_id": "<uuid>", "lang": "zh" | "en", "payment_method": "free" | "paid" | "shop" }
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        reward_item_id = request.data.get('reward_item_id')
+        lang = request.data.get('lang', 'zh')
+        payment_method = request.data.get('payment_method', 'free')
+
+        if not reward_item_id:
+            return Response({"error": "reward_item_id là bắt buộc."}, status=status.HTTP_400_BAD_REQUEST)
+        if lang not in ['zh', 'en']:
+            return Response({"error": "Ngôn ngữ không hợp lệ. Chỉ chấp nhận 'zh' hoặc 'en'."}, status=status.HTTP_400_BAD_REQUEST)
+        if payment_method not in ['free', 'paid', 'shop']:
+            return Response({"error": "Phương thức thanh toán không hợp lệ."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            inventory, transactions = ShopService.purchase_item(
+                user=request.user,
+                reward_item_id=reward_item_id,
+                lang=lang,
+                payment_method=payment_method
+            )
+            
+            # Lấy balance ví cập nhật
+            balances = CoinService.get_all_balances(request.user)
+            
+            return Response({
+                "status": "success",
+                "message": f"Mua thành công vật phẩm: {inventory.reward_item.name}",
+                "inventory": UserInventorySerializer(inventory).data,
+                "wallet_balances": balances
+            }, status=status.HTTP_200_OK)
+
+        except ItemNotFoundError as e:
+            return Response({"error": str(e)}, status=status.HTTP_404_NOT_FOUND)
+        except (AlreadyOwnedError, InvalidPaymentMethodError, InsufficientCoinsError) as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.exception("Lỗi không mong đợi khi xử lý mua vật phẩm.")
+            return Response({"error": "Lỗi hệ thống khi xử lý mua vật phẩm."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 

@@ -60,6 +60,7 @@ class CoinWallet(models.Model):
     lang = models.CharField(max_length=10, choices=[('zh', 'Linh Thạch'), ('en', 'Coin')])
     paid_balance = models.IntegerField(default=0, help_text="Coin refill/mua — trừ trước")
     free_balance = models.IntegerField(default=0, help_text="Coin kiếm từ học — trừ sau")
+    shop_balance = models.PositiveIntegerField(default=0, help_text="Hạn ngạch cửa hàng (Thần thạch/Đá quý) — chỉ dùng mua shop")
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -86,8 +87,13 @@ class CoinTransaction(models.Model):
         ('TIER_RESET', 'Reset khi hết hạn subscription'),
         ('SPEND_WRITING_PRACTICE', 'Luyện viết AI'),
         ('SPEND_PDF_EXPORT', 'Xuất PDF quá hạn mức'),
+        ('SHOP_PURCHASE', 'Mua vật phẩm tại Cửa Hàng'),
     ]
-    BALANCE_TYPES = [('paid', 'Paid'), ('free', 'Free')]
+    BALANCE_TYPES = [
+        ('paid', 'Paid'),
+        ('free', 'Free'),
+        ('shop', 'Shop (Thần thạch/Đá quý)')
+    ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     group_id = models.UUIDField(default=uuid.uuid4, db_index=True,
@@ -100,6 +106,7 @@ class CoinTransaction(models.Model):
     amount = models.IntegerField(help_text="Dương = cộng, Âm = trừ. Giá trị chính xác theo balance_type")
     paid_balance_after = models.IntegerField(help_text="Snapshot paid_balance sau giao dịch")
     free_balance_after = models.IntegerField(help_text="Snapshot free_balance sau giao dịch")
+    shop_balance_after = models.IntegerField(default=0, help_text="Snapshot shop_balance sau giao dịch")
     reference_id = models.CharField(max_length=255, blank=True, default='')
     note = models.TextField(blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
@@ -299,6 +306,10 @@ class RewardItem(models.Model):
         ('legendary', 'Huyền thoại'),
     ])
     ui_metadata = models.JSONField(default=dict, blank=True, help_text="Cấu hình hiển thị động ở Frontend")
+    is_sellable = models.BooleanField(default=False, help_text="Có thể mua bằng tiền/coin trong shop không")
+    price_free = models.PositiveIntegerField(default=0, help_text="Giá bằng coin free (0 = không bán bằng free)")
+    price_paid = models.PositiveIntegerField(default=0, help_text="Giá bằng coin paid (0 = không bán bằng paid)")
+    price_shop = models.PositiveIntegerField(default=0, help_text="Giá bằng Thần thạch/Đá quý (0 = không bán bằng shop quota)")
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 

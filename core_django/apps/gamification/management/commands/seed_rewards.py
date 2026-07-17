@@ -250,6 +250,7 @@ class Command(BaseCommand):
                 'description': frame['desc'],
                 'image_url': f"/frames/{slug_file}",
                 'rarity': frame['rarity'],
+                'is_sellable': True,
                 'ui_metadata': {
                     'frame_type': 'standard',
                     'assets': {
@@ -261,6 +262,27 @@ class Command(BaseCommand):
 
         created_items = {}
         for item in items_data:
+            is_sellable = item.get('is_sellable', False)
+            price_free = item.get('price_free', 0)
+            price_paid = item.get('price_paid', 0)
+            price_shop = item.get('price_shop', 0)
+
+            # Thiết lập giá mặc định theo độ hiếm nếu là vật phẩm bán trong shop
+            if is_sellable and price_free == 0 and price_paid == 0 and price_shop == 0:
+                rarity = item['rarity']
+                if rarity == 'common':
+                    price_free = 50
+                elif rarity == 'rare':
+                    price_free = 300
+                    price_paid = 15
+                    price_shop = 15
+                elif rarity == 'epic':
+                    price_free = 1500
+                    price_paid = 50
+                    price_shop = 50
+                elif rarity == 'legendary':
+                    price_shop = 200
+
             obj, created = RewardItem.objects.update_or_create(
                 name=item['name'],
                 defaults={
@@ -270,6 +292,10 @@ class Command(BaseCommand):
                     'title_text': item.get('title_text', ''),
                     'rarity': item['rarity'],
                     'ui_metadata': item.get('ui_metadata', {}),
+                    'is_sellable': is_sellable,
+                    'price_free': price_free,
+                    'price_paid': price_paid,
+                    'price_shop': price_shop,
                     'is_active': True
                 }
             )
