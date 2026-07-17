@@ -154,6 +154,13 @@ class ForumPostListView(generics.ListCreateAPIView):
         # Chỉ trả về bài viết không bị ẩn theo ngôn ngữ
         return ForumPost.objects.filter(lang=lang, is_hidden=False)
 
+    def post(self, request, *args, **kwargs):
+        # Tạm thời bảo trì tính năng đăng bài, không ảnh hưởng đến code gốc bên dưới
+        return Response(
+            {"detail": "Tính năng đăng bài đang bảo trì. Vui lòng quay lại sau!"},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE
+        )
+
     def perform_create(self, serializer):
         image_url = serializer.validated_data.get('image_url', '')
         lang = serializer.validated_data['lang']
