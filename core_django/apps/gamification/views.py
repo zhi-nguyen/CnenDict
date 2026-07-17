@@ -97,6 +97,7 @@ from .serializers import (
 )
 from .coin_service import CoinService, InsufficientCoinsError
 from .leveling_service import LevelingService
+from .shop_service import ShopService, ItemNotFoundError, AlreadyOwnedError, InvalidPaymentMethodError
 import uuid
 
 class ActivityHistoryView(generics.ListAPIView):
