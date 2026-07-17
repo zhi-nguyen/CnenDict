@@ -127,3 +127,140 @@ def refill_individual_wallet_task(self, user_id: str, tier: str):
         logger.error(f"Failed refill for user {user_id} (tier={tier}): {e}", exc_info=True)
         raise self.retry(exc=e)
 
+
+@shared_task(bind=True, max_retries=2, default_retry_delay=10, queue='queue_chat')
+def process_chat_exp(self, payload: dict) -> dict:
+    """
+    Celery task xử lý EXP từ chat AI.
+    
+    Idempotency 3 lớp:
+      Lớp 1: Redis SET NX lock (fast-fail, 5 phút TTL) qua cache.add()
+      Lớp 2: EXPTransaction.idempotency_key UNIQUE constraint
+      Lớp 3: LevelRewardLog unique_together
+    """
+    from django.core.cache import cache
+    from django.contrib.auth import get_user_model
+    from django.db import IntegrityError
+    from .leveling_service import LevelingService
+    import logging
+
+    logger = logging.getLogger(__name__)
+    User = get_user_model()
+    
+    message_id = payload.get('message_id')
+    user_id = payload.get('user_id')
+    lang = payload.get('lang')
+    relation_type = payload.get('relation_type', 'peer')
+    is_reward = payload.get('is_reward', 'neutral')  # 'reward' / 'punish' / 'neutral'
+    joy = float(payload.get('joy', 0.5))
+    sad = float(payload.get('sad', 0.1))
+    
+    if not message_id or not user_id or not lang:
+        logger.error(f"Invalid chat EXP payload: {payload}")
+        return {'status': 'error', 'reason': 'missing_fields'}
+    
+    # ── Lớp 1: Redis Dedup Lock ──
+    # cache.add() trả về True nếu key chưa tồn tại và set thành công.
+    # An toàn trên mọi cache backend của Django (Memcached, django-redis, ...)
+    dedup_key = f"exp_dedup:CHAT:{user_id}:{lang}:{message_id}"
+    try:
+        lock_acquired = cache.add(dedup_key, '1', timeout=300)
+    except Exception as cache_err:
+        logger.warning(f"Cache.add failed, bypassing Lớp 1 cache check: {cache_err}")
+        lock_acquired = True  # Nếu Redis lỗi, bypass Lớp 1 và dựa vào Lớp 2 (Postgres unique key) để an toàn
+    
+    if not lock_acquired:
+        logger.warning(
+            f"Redis dedup hit for message_id={message_id}. "
+            f"Task already processed or in-progress. Skipping."
+        )
+        return {'status': 'skipped', 'reason': 'redis_dedup'}
+    
+    try:
+        user = User.objects.get(id=user_id)
+        
+        # Tính EXP tổng hợp (net exp)
+        SUPERIOR_ROLES = {'master', 'professor', 'interviewer'}
+        is_superior = relation_type in SUPERIOR_ROLES
+        
+        exp_amount = LevelingService.calculate_chat_exp(
+            relation_type, is_reward, joy, sad
+        )
+        
+        # Xác định source_type và idempotency key dựa trên việc thưởng, phạt hay bình thường
+        if is_reward == 'reward':
+            source_type = 'CHAT_REWARD'
+        elif is_reward == 'punish':
+            source_type = 'CHAT_PUNISH'
+        else:
+            source_type = 'CHAT_SUPERIOR' if is_superior else 'CHAT_PEER'
+            
+        idemp_key = f"{source_type}:{user_id}:{lang}:{message_id}"
+        
+        # Thực hiện 1 giao dịch EXP hợp nhất duy nhất
+        result = LevelingService.add_exp(
+            user=user, lang=lang, amount=exp_amount,
+            source_type=source_type,
+            idempotency_key=idemp_key,
+            reference_id=message_id,
+            note=f'Chat EXP ({relation_type}, is_reward={is_reward}, joy={joy}, sad={sad})'
+        )
+        
+        # WebSocket notification nếu level up
+        if result.get('leveled_up') and not result.get('already_processed'):
+            from core_project.ws_utils import ws_notify
+            ws_notify(
+                user_id=user_id,
+                event_type='level_up',
+                title=f'Chúc mừng! Bạn đã đạt Level {result["level_after"]}!',
+                payload={
+                    'lang': lang,
+                    'level_before': result['level_before'],
+                    'level_after': result['level_after'],
+                    'rewards': result.get('rewards_granted', []),
+                },
+                persist=True,
+            )
+        
+        # WebSocket notification cho EXP change
+        if not result.get('already_processed'):
+            from core_project.ws_utils import ws_notify
+            net_change = exp_amount
+            event_type = 'exp_gain' if net_change > 0 else 'exp_deduct'
+            lang_label = 'tiếng Trung' if lang == 'zh' else 'tiếng Anh'
+            if net_change > 0:
+                title = f"Nhận được +{net_change} EXP {lang_label}"
+            else:
+                title = f"Bị trừ {abs(net_change)} EXP {lang_label}"
+            
+            ws_notify(
+                user_id=user_id,
+                event_type=event_type,
+                title=title,
+                payload={
+                    'lang': lang,
+                    'amount': net_change,
+                    'source': 'chat',
+                },
+                persist=False,
+            )
+        
+        return {'status': 'success', **result}
+        
+    except IntegrityError:
+        # Lớp 2 đã chặn — không retry, trả về skipped
+        logger.warning(f"DB IntegrityError for message_id={message_id}. Already processed.")
+        return {'status': 'skipped', 'reason': 'db_idempotency'}
+    except User.DoesNotExist:
+        logger.error(f"User {user_id} not found for chat EXP.")
+        return {'status': 'error', 'reason': 'user_not_found'}
+    except Exception as e:
+        logger.error(f"Failed to process chat EXP: {e}", exc_info=True)
+        # Xóa Redis lock để cho phép retry
+        try:
+            cache.delete(dedup_key)
+        except Exception:
+            pass
+        raise self.retry(exc=e)
+
+

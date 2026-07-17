@@ -51,6 +51,55 @@ async def _publish_json(client, user_id: str, msg_type: str, payload: dict):
     await client.publish("ws:notifications", json.dumps(message, ensure_ascii=False))
 
 
+async def _dispatch_celery_task(client, task_name: str, task_args: list, task_kwargs: dict = None, queue_name: str = "queue_chat"):
+    """Helper to dispatch a Celery task to Redis queue."""
+    import base64
+    if task_kwargs is None:
+        task_kwargs = {}
+    
+    body_data = [task_args, task_kwargs, {"callbacks": None, "errbacks": None, "chain": None, "chord": None}]
+    body_str = json.dumps(body_data)
+    body_b64 = base64.b64encode(body_str.encode('utf-8')).decode('utf-8')
+    
+    celery_id = str(uuid.uuid4())
+    celery_payload = {
+        "headers": {
+            "lang": "py",
+            "task": task_name,
+            "id": celery_id,
+            "root_id": celery_id,
+            "parent_id": None,
+            "group": None,
+            "meth": None,
+            "shadow": None,
+            "eta": None,
+            "expires": None,
+            "retries": 0,
+            "timelimit": [None, None],
+            "argsrepr": repr(task_args),
+            "kwargsrepr": repr(task_kwargs),
+            "origin": "ai_chat_service"
+        },
+        "properties": {
+            "correlation_id": celery_id,
+            "reply_to": "",
+            "delivery_mode": 2,
+            "delivery_info": {
+                "exchange": "",
+                "routing_key": queue_name
+            },
+            "priority": 0,
+            "body_encoding": "base64",
+            "delivery_tag": celery_id
+        },
+        "content-encoding": "utf-8",
+        "content-type": "application/json",
+        "body": body_b64
+    }
+    await client.rpush(queue_name, json.dumps(celery_payload))
+    logger.info(f"Dispatched Celery task {task_name} to queue {queue_name}")
+
+
 async def process_chat_request(redis_client: RedisClient, agent: ChineseTutorAgent, payload: Dict[str, Any]):
     """
     Process a single chat request:
@@ -380,6 +429,32 @@ async def process_chat_request(redis_client: RedisClient, agent: ChineseTutorAge
             "persona_id": persona_id,
         })
         logger.info(f"Published final chat complete response for user {user_id} (persona {persona_id})")
+
+        # ── Dispatch Celery task for chat EXP calculation ──
+        message_id = str(uuid.uuid4())
+        is_reward_str = result.get("is_reward", "neutral")
+        
+        exp_payload = {
+            "message_id": message_id,
+            "user_id": user_id,
+            "lang": learning_language,
+            "relation_type": relation_type,
+            "is_reward": is_reward_str,
+            "joy": active_joy,
+            "sad": active_sad,
+            "persona_id": persona_id,
+        }
+        
+        try:
+            await _dispatch_celery_task(
+                client, 
+                "apps.gamification.tasks.process_chat_exp", 
+                [exp_payload],
+                queue_name="queue_chat"
+            )
+            logger.info(f"Dispatched process_chat_exp Celery task for message_id={message_id}")
+        except Exception as dispatch_err:
+            logger.error(f"Failed to dispatch process_chat_exp task: {dispatch_err}", exc_info=True)
 
     except Exception as e:
         logger.error(f"Error streaming AI response: {e}", exc_info=True)

@@ -9,14 +9,32 @@ User = get_user_model()
 
 class UserMinSerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField()
+    equipped_frame = serializers.SerializerMethodField()
+    equipped_title = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ('id', 'username', 'avatar', 'full_name')
+        fields = ('id', 'username', 'avatar', 'full_name', 'equipped_frame', 'equipped_title')
 
     def get_full_name(self, obj):
         full_name = obj.get_full_name().strip()
         return full_name if full_name else obj.username
+
+    def get_equipped_frame(self, obj):
+        from apps.gamification.models import UserInventory
+        from apps.gamification.serializers import RewardItemSerializer
+        inv = UserInventory.objects.filter(user=obj, reward_item__reward_type='avatar_frame', is_equipped=True).select_related('reward_item').first()
+        if inv:
+            return RewardItemSerializer(inv.reward_item).data
+        return None
+
+    def get_equipped_title(self, obj):
+        from apps.gamification.models import UserInventory
+        from apps.gamification.serializers import RewardItemSerializer
+        inv = UserInventory.objects.filter(user=obj, reward_item__reward_type='title', is_equipped=True).select_related('reward_item').first()
+        if inv:
+            return RewardItemSerializer(inv.reward_item).data
+        return None
 
 
 class WordCommentSerializer(serializers.ModelSerializer):

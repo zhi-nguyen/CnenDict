@@ -87,9 +87,16 @@ class StudyHistoryLogView(views.APIView):
 
 from apps.dictionary_zh.views import StandardResultsSetPagination
 from apps.flashcard_exercises.models import FlashcardExercise
-from .models import StudySession, StudySessionCard, CoinWallet, CoinTransaction, CoinPurchaseOrder, CoinConfig
-from .serializers import StudySessionSerializer, StudySessionCardSerializer, CoinWalletSerializer, CoinTransactionSerializer
+from .models import (
+    StudySession, StudySessionCard, CoinWallet, CoinTransaction, CoinPurchaseOrder, CoinConfig,
+    UserLanguageLevel, EXPTransaction, RewardItem, RewardRule, UserInventory
+)
+from .serializers import (
+    StudySessionSerializer, StudySessionCardSerializer, CoinWalletSerializer, CoinTransactionSerializer,
+    UserLanguageLevelSerializer, EXPTransactionSerializer, RewardItemSerializer, UserInventorySerializer
+)
 from .coin_service import CoinService
+from .leveling_service import LevelingService
 import uuid
 
 class ActivityHistoryView(generics.ListAPIView):
@@ -248,15 +255,86 @@ class FinishStudySessionView(views.APIView):
             session.coins_earned = actual_earned
             session.save(update_fields=['status', 'memorized_count', 'coins_earned', 'finished_at'])
 
+        # ── Cộng EXP cho study session (tối đa 5 lần/ngày) ──
+        from django.core.cache import cache
+        
+        STUDY_EXP_PER_SESSION = 100
+        STUDY_EXP_DAILY_MAX = 5  # Tối đa 5 lần/ngày
+        today = timezone.localdate()
+        redis_key = f"user:study_session_exp_count:{request.user.id}:{session.lang}:{today.isoformat()}"
+
+        # 1. Lấy counter từ Redis
+        try:
+            daily_count = cache.get(redis_key)
+        except Exception:
+            daily_count = None
+
+        if daily_count is None:
+            # Fallback: đếm từ DB
+            from .models import EXPTransaction
+            db_count = EXPTransaction.objects.filter(
+                user=request.user,
+                lang=session.lang,
+                source_type='STUDY_SESSION',
+                created_at__date=today
+            ).count()
+            daily_count = db_count
+            try:
+                cache.set(redis_key, daily_count, timeout=86400)
+            except Exception:
+                pass
+        else:
+            daily_count = int(daily_count)
+
+        # 2. Chỉ cộng EXP nếu chưa đạt giới hạn
+        exp_earned = 0
+        exp_capped = False
+        exp_result = None
+
+        if daily_count < STUDY_EXP_DAILY_MAX:
+            # Idempotency key = STUDY_SESSION:{user}:{lang}:{session_id}
+            idemp_key = f"STUDY_SESSION:{request.user.id}:{session.lang}:{session.id}"
+            
+            exp_result = LevelingService.add_exp(
+                user=request.user,
+                lang=session.lang,
+                amount=STUDY_EXP_PER_SESSION,
+                source_type='STUDY_SESSION',
+                idempotency_key=idemp_key,
+                reference_id=str(session.id),
+                note=f'Flashcard session #{daily_count + 1}/5'
+            )
+            
+            if exp_result and not exp_result.get('already_processed'):
+                exp_earned = STUDY_EXP_PER_SESSION
+                # Increment Redis counter
+                try:
+                    cache.incr(redis_key)
+                except Exception:
+                    try:
+                        cache.set(redis_key, daily_count + 1, timeout=86400)
+                    except Exception:
+                        pass
+        else:
+            exp_capped = True
+
         balances = CoinService.get_all_balances(request.user)
 
+        # Trả về kết quả, bao gồm thông tin EXP
         return Response({
             "status": "success",
             "session_id": str(session.id),
             "memorized_count": memorized_count,
             "coins_earned": actual_earned,
             "is_capped": is_capped,
-            "wallet_balances": balances
+            "wallet_balances": balances,
+            "exp_earned": exp_earned,
+            "exp_capped": exp_capped,
+            "study_exp_today": min(daily_count + (1 if exp_earned > 0 else 0), STUDY_EXP_DAILY_MAX),
+            "study_exp_max": STUDY_EXP_DAILY_MAX,
+            "level_up": exp_result.get('leveled_up', False) if exp_result else False,
+            "level_after": exp_result.get('level_after') if exp_result else None,
+            "rewards_granted": exp_result.get('rewards_granted', []) if exp_result else [],
         }, status=status.HTTP_200_OK)
 
 
@@ -439,6 +517,9 @@ class GamificationDashboardView(views.APIView):
         history = StudyHistory.objects.filter(user=user).order_by('-study_date')
         wallets = CoinService.get_all_balances(user)
 
+        zh_level = LevelingService.get_or_create_level(user, 'zh')
+        en_level = LevelingService.get_or_create_level(user, 'en')
+
         return Response({
             'streak': UserStreakSerializer(streak).data,
             'target': DailyTargetSerializer(target).data,
@@ -446,6 +527,118 @@ class GamificationDashboardView(views.APIView):
             'wallets': {
                 'zh': {'name': 'Linh Thạch', **wallets['zh']},
                 'en': {'name': 'Coin', **wallets['en']},
+            },
+            'levels': {
+                'zh': {
+                    'level': zh_level.level,
+                    'current_exp': zh_level.current_exp,
+                    'exp_required': LevelingService.exp_required_for_level(zh_level.level),
+                    'total_exp': zh_level.total_exp,
+                },
+                'en': {
+                    'level': en_level.level,
+                    'current_exp': en_level.current_exp,
+                    'exp_required': LevelingService.exp_required_for_level(en_level.level),
+                    'total_exp': en_level.total_exp,
+                }
             }
         }, status=status.HTTP_200_OK)
+
+
+class LevelInfoView(views.APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, lang=None):
+        user = request.user
+        if lang:
+            if lang not in ['zh', 'en']:
+                return Response({"error": "Language must be 'zh' or 'en'."}, status=status.HTTP_400_BAD_REQUEST)
+            level_obj = LevelingService.get_or_create_level(user, lang)
+            serializer = UserLanguageLevelSerializer(level_obj)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        
+        # Ensure they both exist
+        LevelingService.get_or_create_level(user, 'zh')
+        LevelingService.get_or_create_level(user, 'en')
+        levels = UserLanguageLevel.objects.filter(user=user)
+        serializer = UserLanguageLevelSerializer(levels, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class UserInventoryView(generics.ListAPIView):
+    serializer_class = UserInventorySerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return UserInventory.objects.filter(user=self.request.user).order_by('-acquired_at')
+
+
+class EquipInventoryItemView(views.APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, item_id):
+        user = request.user
+        try:
+            inv_item = UserInventory.objects.get(id=item_id, user=user)
+        except UserInventory.DoesNotExist:
+            return Response({"error": "Vật phẩm không tồn tại trong kho đồ."}, status=status.HTTP_404_NOT_FOUND)
+
+        reward_item = inv_item.reward_item
+        # Chỉ có khung avatar (avatar_frame) hoặc danh hiệu (title) mới trang bị được
+        if reward_item.reward_type not in ['avatar_frame', 'title']:
+            return Response({"error": "Loại vật phẩm này không hỗ trợ trang bị."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Khi trang bị 1 vật phẩm, tháo trang bị các vật phẩm cùng loại khác
+        from django.db import transaction
+        with transaction.atomic():
+            if not inv_item.is_equipped:
+                # Tìm các item cùng loại đã được trang bị của user và tháo chúng ra
+                UserInventory.objects.filter(
+                    user=user, 
+                    reward_item__reward_type=reward_item.reward_type,
+                    is_equipped=True
+                ).update(is_equipped=False)
+                
+                inv_item.is_equipped = True
+                inv_item.save(update_fields=['is_equipped'])
+                action_text = "Đã trang bị"
+            else:
+                inv_item.is_equipped = False
+                inv_item.save(update_fields=['is_equipped'])
+                action_text = "Đã tháo trang bị"
+
+        return Response({
+            "status": "success",
+            "message": f"{action_text} thành công: {reward_item.name}",
+            "is_equipped": inv_item.is_equipped
+        }, status=status.HTTP_200_OK)
+
+
+class RewardsPreviewView(views.APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        rules = RewardRule.objects.filter(is_active=True).select_related('reward_item').order_by('required_level')
+        
+        data = []
+        for r in rules:
+            item = r.reward_item
+            data.append({
+                'id': str(r.id),
+                'lang': r.lang,
+                'required_level': r.required_level,
+                'quantity': r.quantity,
+                'reward_item': {
+                    'id': str(item.id),
+                    'name': item.name,
+                    'reward_type': item.reward_type,
+                    'description': item.description,
+                    'image_url': item.image_url,
+                    'title_text': item.title_text,
+                    'rarity': item.rarity,
+                    'ui_metadata': item.ui_metadata,
+                }
+            })
+        return Response(data, status=status.HTTP_200_OK)
+
 

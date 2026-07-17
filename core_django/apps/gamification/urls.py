@@ -2,7 +2,8 @@ from django.urls import path
 from .views import (
     StreakView, TargetView, StudyHistoryLogView, ActivityHistoryView, GamificationDashboardView,
     CreateStudySessionView, FinishStudySessionView, WalletBalanceView, InitiateCoinPurchaseView,
-    CoinConfigView, CoinPurchaseStatusView, AllCoinConfigsView
+    CoinConfigView, CoinPurchaseStatusView, AllCoinConfigsView,
+    LevelInfoView, UserInventoryView, EquipInventoryItemView, RewardsPreviewView
 )
 
 urlpatterns = [
@@ -18,6 +19,13 @@ urlpatterns = [
     path('coin-config/', CoinConfigView.as_view(), name='coin-config'),
     path('wallet/all-configs/', AllCoinConfigsView.as_view(), name='all-coin-configs'),
     path('wallet/purchase/<uuid:order_id>/', CoinPurchaseStatusView.as_view(), name='coin-purchase-status'),
+    
+    # Level & Inventory endpoints
+    path('level/', LevelInfoView.as_view(), name='level-info-all'),
+    path('level/<str:lang>/', LevelInfoView.as_view(), name='level-info-lang'),
+    path('inventory/', UserInventoryView.as_view(), name='user-inventory'),
+    path('inventory/<uuid:item_id>/equip/', EquipInventoryItemView.as_view(), name='equip-inventory-item'),
+    path('rewards/preview/', RewardsPreviewView.as_view(), name='rewards-preview'),
 ]
 
 

@@ -203,3 +203,171 @@ class CoinPurchaseOrder(models.Model):
     def is_expired(self):
         return self.status == 'PENDING' and timezone.now() > self.expires_at
 
+
+class UserLanguageLevel(models.Model):
+    """
+    EXP & Level theo ngôn ngữ cho mỗi user.
+    Mỗi user có 1 record cho mỗi ngôn ngữ (zh, en).
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='language_levels')
+    lang = models.CharField(max_length=10, choices=[('zh', 'Tiếng Trung'), ('en', 'Tiếng Anh')])
+    level = models.IntegerField(default=1)
+    current_exp = models.IntegerField(default=0, help_text="EXP tích lũy trong level hiện tại")
+    total_exp = models.IntegerField(default=0, help_text="Tổng EXP tích lũy từ đầu (không bao giờ giảm)")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('user', 'lang')
+        indexes = [
+            models.Index(fields=['user', 'lang']),
+        ]
+
+    def __str__(self):
+        return f"{self.user.username} - {self.lang} LV{self.level} (EXP: {self.current_exp})"
+
+
+class EXPTransaction(models.Model):
+    """Audit trail cho mọi thay đổi EXP."""
+    SOURCE_TYPES = [
+        ('STUDY_SESSION', 'Hoàn thành lật thẻ flashcard'),
+        ('CHAT_PEER', 'Chat AI đồng cấp'),
+        ('CHAT_SUPERIOR', 'Chat AI cấp trên'),
+        ('CHAT_REWARD', 'Thưởng từ chat'),
+        ('CHAT_PUNISH', 'Phạt từ chat'),
+        ('ADMIN_ADJUST', 'Admin điều chỉnh'),
+        ('QUEST_COMPLETE', 'Hoàn thành nhiệm vụ'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    lang = models.CharField(max_length=10)
+    source_type = models.CharField(max_length=30, choices=SOURCE_TYPES)
+    amount = models.IntegerField(help_text="Dương = cộng EXP, Âm = trừ EXP")
+    level_before = models.IntegerField()
+    level_after = models.IntegerField()
+    exp_before = models.IntegerField(help_text="current_exp trước giao dịch")
+    exp_after = models.IntegerField(help_text="current_exp sau giao dịch")
+    idempotency_key = models.CharField(
+        max_length=255, unique=True, null=True, blank=True,
+        help_text="Khóa duy nhất đảm bảo mỗi giao dịch EXP chỉ được xử lý 1 lần. "
+                  "Format: '{source_type}:{user_id}:{lang}:{message_id_or_date}'"
+    )
+    reference_id = models.CharField(max_length=255, blank=True, default='')
+    note = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'lang', 'created_at']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['idempotency_key'],
+                name='uq_exp_transaction_idempotency',
+                condition=models.Q(idempotency_key__isnull=False),
+            )
+        ]
+
+
+class RewardItem(models.Model):
+    """Danh mục vật phẩm phần thưởng — Admin quản lý."""
+    REWARD_TYPES = [
+        ('avatar_frame', 'Khung Avatar'),
+        ('title', 'Danh hiệu'),
+        ('bonus_coins', 'Điểm thưởng (Coin)'),
+        ('item', 'Vật phẩm Cosmetic'),
+        ('badge', 'Huy hiệu'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=200, help_text="Tên hiển thị (VD: 'Khung Hỏa Diệm')")
+    reward_type = models.CharField(max_length=20, choices=REWARD_TYPES)
+    description = models.TextField(blank=True, default='')
+    
+    # Data payload tùy loại
+    image_url = models.CharField(max_length=500, blank=True, default='', help_text="URL hoặc đường dẫn ảnh cho khung/badge/item")
+    title_text = models.CharField(max_length=100, blank=True, default='', help_text="Text danh hiệu nếu type=title")
+    coin_amount = models.IntegerField(default=0, help_text="Số coin thưởng nếu type=bonus_coins")
+    
+    # Metadata
+    rarity = models.CharField(max_length=20, default='common', choices=[
+        ('common', 'Phổ thông'),
+        ('rare', 'Hiếm'),
+        ('epic', 'Sử thi'),
+        ('legendary', 'Huyền thoại'),
+    ])
+    ui_metadata = models.JSONField(default=dict, blank=True, help_text="Cấu hình hiển thị động ở Frontend")
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"[{self.get_reward_type_display()}] {self.name} ({self.rarity})"
+
+
+class RewardRule(models.Model):
+    """
+    Quy tắc thưởng khi user đạt mốc level.
+    Admin tạo rule: "Khi đạt LV 5 ngôn ngữ zh → nhận RewardItem X".
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    lang = models.CharField(max_length=10, choices=[('zh', 'Tiếng Trung'), ('en', 'Tiếng Anh'), ('all', 'Tất cả')])
+    required_level = models.IntegerField(help_text="Level cần đạt để nhận phần thưởng")
+    reward_item = models.ForeignKey(RewardItem, on_delete=models.CASCADE, related_name='rules')
+    quantity = models.IntegerField(default=1, help_text="Số lượng vật phẩm thưởng")
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('lang', 'required_level', 'reward_item')
+        ordering = ['lang', 'required_level']
+
+    def __str__(self):
+        return f"LV{self.required_level} ({self.lang}) → {self.reward_item.name} x{self.quantity}"
+
+
+class UserInventory(models.Model):
+    """Kho vật phẩm đã nhận của user."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='inventory')
+    reward_item = models.ForeignKey(RewardItem, on_delete=models.CASCADE, related_name='user_inventories')
+    quantity = models.IntegerField(default=1)
+    is_equipped = models.BooleanField(default=False, help_text="Đang trang bị/sử dụng")
+    acquired_at = models.DateTimeField(auto_now_add=True)
+    source_rule = models.ForeignKey(RewardRule, on_delete=models.SET_NULL, null=True, blank=True,
+                                     help_text="Rule đã grant vật phẩm này")
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['user', 'reward_item']),
+        ]
+
+    def __str__(self):
+        equipped = " [EQUIPPED]" if self.is_equipped else ""
+        return f"{self.user.username} - {self.reward_item.name} x{self.quantity}{equipped}"
+
+
+class LevelRewardLog(models.Model):
+    """
+    Ghi nhận phần thưởng ĐÃ PHÁT cho mỗi (user, lang, level, rule).
+    Dùng unique_together để đảm bảo không bao giờ trao trùng,
+    kể cả khi Celery Worker retry task nhiều lần.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='level_reward_logs')
+    lang = models.CharField(max_length=10)
+    level = models.IntegerField(help_text="Level tại thời điểm nhận thưởng")
+    reward_rule = models.ForeignKey(RewardRule, on_delete=models.CASCADE)
+    granted_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('user', 'lang', 'level', 'reward_rule')
+        indexes = [
+            models.Index(fields=['user', 'lang', 'level']),
+        ]
+
+    def __str__(self):
+        return f"{self.user.username} - LV{self.level} ({self.lang}) - {self.reward_rule}"
+
+
