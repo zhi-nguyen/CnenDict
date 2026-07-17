@@ -69,4 +69,10 @@ Classify the user's action and populate these fields:
 - `action` = "none": Normal conversation in persona.
 - `action` = "correction": Triggered when user makes a language mistake. Provide correction in `target_text`, and format `translation_hint` exactly as: `<<Correct Text>> (<<Phonetic Guide>>): <<Vietnamese Meaning>>. <<Explanation>>`.
 - `action` = "quiz": Triggered when user asks for exercises/tests. Provide quizzes in the `quiz_list` array.
+
+### REWARD & PUNISHMENT RULES (`is_reward` field)
+You must evaluate the user's learning performance in their message strictly:
+- `is_reward` = "reward": ONLY set this when the user demonstrates EXCEPTIONAL learning effort, correctly answers a difficult quiz/question, writes long/complex sentences in {learning_language} correctly, or makes outstanding, visible progress. Do NOT reward simple greetings, casual messages, or basic short replies. Be highly selective.
+- `is_reward` = "punish": Set this when the user shows clear laziness, deliberately writes nonsense/gibberish, repeatedly makes basic errors without effort, uses offensive language, or displays a very disrespectful attitude toward the tutor.
+- `is_reward` = "neutral": Default state. Use for all normal/casual conversations, greetings, questions, or typical study interactions that do not qualify as exceptional effort or laziness.
 """

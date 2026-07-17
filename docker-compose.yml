@@ -88,7 +88,7 @@ services:
   core-django:
     build:
       context: ./core_django
-    command: ["gunicorn", "core_project.wsgi:application", "--bind", "0.0.0.0:8080", "--workers", "3", "--worker-class", "gthread", "--threads", "4", "--timeout", "120", "--access-logfile", "-", "--error-logfile", "-"]
+    command: ["gunicorn", "core_project.wsgi:application", "--bind", "0.0.0.0:8080", "--workers", "3", "--worker-class", "gthread", "--threads", "4", "--timeout", "120", "--access-logfile", "/app/logs/gunicorn_access.log", "--error-logfile", "/app/logs/gunicorn_error.log"]
     depends_on:
       redis:
         condition: service_healthy
@@ -107,6 +107,7 @@ services:
       - django_static:/app/staticfiles
       - django_media:/app/media
       - ${XIAOYUE_DATA_ROOT:-./data}:/data
+      - ./logs/core_django:/app/logs
     restart: unless-stopped
     networks:
       - xiaoyue-network
@@ -349,9 +350,12 @@ services:
     volumes:
       - ./image_service/cache:/app/cache
       - ./core_django/key.json:/app/key.json:ro
+      - ./logs/image_service:/app/logs
     environment:
       - GOOGLE_APPLICATION_CREDENTIALS=/app/key.json
       - GS_BUCKET_NAME=${GS_BUCKET_NAME:-cnen-bucket}
+    env_file:
+      - .env
     restart: unless-stopped
     networks:
       - xiaoyue-network

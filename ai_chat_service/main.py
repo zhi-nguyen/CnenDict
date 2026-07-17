@@ -17,9 +17,19 @@ from ai_agent import ChineseTutorAgent
 from redis_listener import start_redis_listener
 
 # Configure logging
+import os
+
+LOG_DIR = "/app/logs"
+os.makedirs(LOG_DIR, exist_ok=True)
+log_file = os.path.join(LOG_DIR, "ai_chat_service.log")
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(log_file, encoding='utf-8')
+    ]
 )
 logger = logging.getLogger("ai_chat_service")
 

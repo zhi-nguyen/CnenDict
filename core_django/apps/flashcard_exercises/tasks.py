@@ -10,7 +10,7 @@ from celery import shared_task
 from celery.exceptions import Retry
 from core_project.ws_utils import ws_notify
 
-from .models import FlashcardExercise, UserFlashcardHistory
+from .models import FlashcardExercise, UserFlashcardHistory, WritingTask
 from .prompts import (
     get_exercise_system_prompt,
     get_writing_check_system_prompt,
@@ -19,6 +19,34 @@ from .prompts import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def handle_task_failure(writing_task_id, user_id, lang, cost, error_msg):
+    from apps.gamification.coin_service import CoinService
+    from django.contrib.auth import get_user_model
+    
+    if writing_task_id:
+        try:
+            task_obj = WritingTask.objects.get(id=writing_task_id)
+            task_obj.status = 'FAILED'
+            task_obj.error_message = error_msg
+            task_obj.save()
+        except WritingTask.DoesNotExist:
+            pass
+
+    if cost > 0 and user_id:
+        User = get_user_model()
+        try:
+            user = User.objects.get(id=user_id)
+            CoinService.refund_coins(
+                user=user,
+                lang=lang,
+                amount=cost,
+                reference_id=str(writing_task_id) if writing_task_id else '',
+                note=f"Refund for writing task failure"
+            )
+        except Exception as ex:
+            logger.error(f"Failed to refund coins for user {user_id}: {ex}")
 
 
 def clean_json_string(raw_text):
@@ -223,8 +251,8 @@ def generate_exercises_task(self, word, lang, user_id=None, **kwargs):
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=10)
-def check_writing_task(self, sentence, target_word, lang, user_id=None, **kwargs):
-    logger.info(f"Starting writing grammar check task for word: {target_word}")
+def check_writing_task(self, sentence, target_word, lang, user_id=None, cost=0, writing_task_id=None, **kwargs):
+    logger.info(f"Starting writing grammar check task for word: {target_word}, task_id: {writing_task_id}")
     
     try:
         from apps.core_shared.ai_client import get_genai_client
@@ -248,12 +276,27 @@ def check_writing_task(self, sentence, target_word, lang, user_id=None, **kwargs
         
         result_data = json.loads(cleaned_text)
 
+        if writing_task_id:
+            try:
+                task_obj = WritingTask.objects.get(id=writing_task_id)
+                task_obj.status = 'SUCCESS'
+                task_obj.result_data = result_data
+                task_obj.save()
+            except WritingTask.DoesNotExist:
+                pass
+
         if user_id:
             ws_notify(
                 user_id=user_id,
                 event_type='writing_check_complete',
                 title='Đã kiểm tra ngữ pháp',
-                payload={'status': 'SUCCESS', 'result': result_data, 'sentence': sentence, 'target_word': target_word},
+                payload={
+                    'status': 'SUCCESS',
+                    'result': result_data,
+                    'sentence': sentence,
+                    'target_word': target_word,
+                    'task_id': str(writing_task_id) if writing_task_id else ''
+                },
                 persist=False
             )
         return result_data
@@ -261,15 +304,120 @@ def check_writing_task(self, sentence, target_word, lang, user_id=None, **kwargs
     except errors.APIError as e:
         if e.code == 429 or "429" in str(e) or "ResourceExhausted" in str(e):
             raise self.retry(exc=e)
-        raise e
-    except Exception as e:
-        logger.error(f"Error in check_writing_task: {e}")
+        handle_task_failure(writing_task_id, user_id, lang, cost, str(e))
         if user_id:
             ws_notify(
                 user_id=user_id,
                 event_type='writing_check_failed',
                 title='Lỗi kiểm tra câu',
-                payload={'status': 'FAILED', 'error': str(e)},
+                payload={'status': 'FAILED', 'error': str(e), 'task_id': str(writing_task_id) if writing_task_id else ''},
+                persist=False
+            )
+        raise e
+    except Exception as e:
+        logger.error(f"Error in check_writing_task: {e}")
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=e)
+            
+        handle_task_failure(writing_task_id, user_id, lang, cost, str(e))
+        if user_id:
+            ws_notify(
+                user_id=user_id,
+                event_type='writing_check_failed',
+                title='Lỗi kiểm tra câu',
+                payload={'status': 'FAILED', 'error': str(e), 'task_id': str(writing_task_id) if writing_task_id else ''},
+                persist=False
+            )
+        raise e
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=10)
+def check_general_writing_task(self, sentence, lang, user_id=None, cost=0, writing_task_id=None, **kwargs):
+    logger.info(f"Starting general writing check task for user: {user_id}, task_id: {writing_task_id}")
+    
+    try:
+        from apps.core_shared.ai_client import get_genai_client
+        from google.genai import errors
+
+        client = get_genai_client()
+        lang_name = "tiếng Trung" if lang == "zh" else "tiếng Anh"
+        system_instruction = f"""Bạn là một trợ lý AI giáo dục chấm bài viết của học sinh bằng {lang_name}.
+Nhiệm vụ của bạn là kiểm tra xem đoạn văn/câu do học sinh tự viết có viết đúng ngữ pháp hay không, đánh giá từ vựng, ngữ pháp và sự mạch lạc.
+Bạn phải trả về một đối tượng JSON hợp lệ duy nhất có cấu trúc sau, không kèm bất kỳ giải thích nào khác ngoài JSON:
+
+{{
+  "score": 85, // Điểm số từ 0 đến 100
+  "is_correct": true, // true nếu đúng ngữ pháp hoàn toàn hoặc chỉ có lỗi cực nhỏ, false nếu sai ngữ pháp nghiêm trọng
+  "feedback": "Nhận xét chi tiết bằng tiếng Việt về đoạn văn viết của học sinh, chỉ ra các lỗi sai ngữ pháp, từ vựng hoặc cách diễn đạt nếu có.",
+  "suggestion": "Đoạn văn gợi ý viết lại chuẩn xác và tự nhiên hơn."
+}}
+"""
+        prompt = f"Ngôn ngữ: '{lang_name}'. Bài viết của học sinh: '{sentence}'."
+
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt,
+            config={
+                'system_instruction': system_instruction,
+                'response_mime_type': 'application/json'
+            }
+        )
+
+        raw_text = response.text
+        cleaned_text = clean_json_string(raw_text)
+        logger.info(f"General writing check result: {cleaned_text}")
+        
+        result_data = json.loads(cleaned_text)
+
+        if writing_task_id:
+            try:
+                task_obj = WritingTask.objects.get(id=writing_task_id)
+                task_obj.status = 'SUCCESS'
+                task_obj.result_data = result_data
+                task_obj.save()
+            except WritingTask.DoesNotExist:
+                pass
+
+        if user_id:
+            ws_notify(
+                user_id=user_id,
+                event_type='general_writing_check_complete',
+                title='Đã chấm điểm bài viết',
+                payload={
+                    'status': 'SUCCESS',
+                    'result': result_data,
+                    'sentence': sentence,
+                    'task_id': str(writing_task_id) if writing_task_id else ''
+                },
+                persist=False
+            )
+        return result_data
+
+    except errors.APIError as e:
+        if e.code == 429 or "429" in str(e) or "ResourceExhausted" in str(e):
+            raise self.retry(exc=e)
+        handle_task_failure(writing_task_id, user_id, lang, cost, str(e))
+        if user_id:
+            ws_notify(
+                user_id=user_id,
+                event_type='general_writing_check_failed',
+                title='Lỗi chấm điểm bài viết',
+                payload={'status': 'FAILED', 'error': str(e), 'task_id': str(writing_task_id) if writing_task_id else ''},
+                persist=False
+            )
+        raise e
+    except Exception as e:
+        logger.error(f"Error in check_general_writing_task: {e}")
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=e)
+            
+        handle_task_failure(writing_task_id, user_id, lang, cost, str(e))
+        if user_id:
+            ws_notify(
+                user_id=user_id,
+                event_type='general_writing_check_failed',
+                title='Lỗi chấm điểm bài viết',
+                payload={'status': 'FAILED', 'error': str(e), 'task_id': str(writing_task_id) if writing_task_id else ''},
                 persist=False
             )
         raise e

@@ -4,9 +4,10 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from django.core.cache import cache
+from django.shortcuts import get_object_or_404
 
-from .models import FlashcardExercise, UserFlashcardHistory
-from .tasks import generate_exercises_task, check_writing_task
+from .models import FlashcardExercise, UserFlashcardHistory, WritingTask
+from .tasks import generate_exercises_task, check_writing_task, check_general_writing_task
 
 
 class GenerateExerciseView(APIView):
@@ -161,13 +162,6 @@ class CheckWritingView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-        user_tier = getattr(request.user.subscription, 'tier', 'Free') if hasattr(request.user, 'subscription') else 'Free'
-        if user_tier == 'Free':
-            return Response(
-                {"error": "Writing exercise AI evaluation is only available for VIP/Premium users."},
-                status=status.HTTP_403_FORBIDDEN
-            )
-
         # Word/character count validation (limit 30)
         if lang == 'en':
             word_count = len(sentence.split())
@@ -182,15 +176,65 @@ class CheckWritingView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        user_tier = getattr(request.user.subscription, 'tier', 'Free') if hasattr(request.user, 'subscription') else 'Free'
+        from apps.gamification.coin_service import CoinService, InsufficientCoinsError
+        config = CoinService.get_coin_config(user_tier)
+        
+        # Calculate cost based on length
+        if lang == 'zh':
+            length = len(sentence.replace(' ', ''))
+            base_cost = config.writing_base_cost_zh if config else 1
+            increment_cost = config.writing_increment_cost_zh if config else 1
+        else:
+            length = len(sentence.split())
+            base_cost = config.writing_base_cost_en if config else 1
+            increment_cost = config.writing_increment_cost_en if config else 1
+            
+        cost = base_cost
+        if length >= 50:
+            cost += ((length - 50) // 50 + 1) * increment_cost
+
+        # Try to spend coins if cost > 0
+        if cost > 0:
+            try:
+                CoinService.spend_coins(
+                    user=request.user,
+                    lang=lang,
+                    amount=cost,
+                    transaction_type='SPEND_WRITING_PRACTICE',
+                    note=f"Luyện viết sâu AI: {sentence[:30]}..."
+                )
+            except InsufficientCoinsError:
+                lang_name = "Linh Thạch" if lang == "zh" else "Coin"
+                return Response(
+                    {"error": f"Không đủ {lang_name} để kiểm tra bài viết (Cần {cost} {lang_name}). Hãy tích lũy thêm điểm!"},
+                    status=status.HTTP_402_PAYMENT_REQUIRED
+                )
+
+        # Create WritingTask database log entry
+        task_obj = WritingTask.objects.create(
+            user=request.user,
+            task_type='deep_practice',
+            sentence=sentence,
+            target_word=target_word,
+            lang=lang,
+            status='PENDING',
+            cost=cost
+        )
+
         user_id = str(request.user.id)
         task = check_writing_task.apply_async(
             args=[sentence, target_word, lang],
-            kwargs={'user_id': user_id, 'user_tier': user_tier}
+            kwargs={
+                'user_id': user_id, 
+                'cost': cost,
+                'writing_task_id': str(task_obj.id)
+            }
         )
 
         return Response({
             'status': 'PENDING',
-            'task_id': task.id
+            'task_id': str(task_obj.id)
         }, status=status.HTTP_202_ACCEPTED)
 
 
@@ -272,60 +316,104 @@ class CheckGeneralWritingView(APIView):
                 )
 
         user_tier = getattr(request.user.subscription, 'tier', 'Free') if hasattr(request.user, 'subscription') else 'Free'
-        if user_tier == 'Free':
-            return Response(
-                {"error": "Writing evaluation is only available for VIP/Premium users."},
-                status=status.HTTP_403_FORBIDDEN
-            )
-
-        try:
-            from apps.core_shared.ai_client import get_genai_client
-            from google.genai import errors
-
-            client = get_genai_client()
+        from apps.gamification.coin_service import CoinService, InsufficientCoinsError
+        config = CoinService.get_coin_config(user_tier)
+        
+        # Calculate cost based on length
+        if lang == 'zh':
+            length = len(sentence.replace(' ', ''))
+            base_cost = config.writing_base_cost_zh if config else 1
+            increment_cost = config.writing_increment_cost_zh if config else 1
+        else:
+            length = len(sentence.split())
+            base_cost = config.writing_base_cost_en if config else 1
+            increment_cost = config.writing_increment_cost_en if config else 1
             
-            # System prompt and user prompt
-            lang_name = "tiếng Trung" if lang == "zh" else "tiếng Anh"
-            system_instruction = f"""Bạn là một trợ lý AI giáo dục chấm bài viết của học sinh bằng {lang_name}.
-Nhiệm vụ của bạn là kiểm tra xem đoạn văn/câu do học sinh tự viết có viết đúng ngữ pháp hay không, đánh giá từ vựng, ngữ pháp và sự mạch lạc.
-Bạn phải trả về một đối tượng JSON hợp lệ duy nhất có cấu trúc sau, không kèm bất kỳ giải thích nào khác ngoài JSON:
+        cost = base_cost
+        if length >= 50:
+            cost += ((length - 50) // 50 + 1) * increment_cost
 
-{{
-  "score": 85, // Điểm số từ 0 đến 100
-  "is_correct": true, // true nếu đúng ngữ pháp hoàn toàn hoặc chỉ có lỗi cực nhỏ, false nếu sai ngữ pháp nghiêm trọng
-  "feedback": "Nhận xét chi tiết bằng tiếng Việt về đoạn văn viết của học sinh, chỉ ra các lỗi sai ngữ pháp, từ vựng hoặc cách diễn đạt nếu có.",
-  "suggestion": "Đoạn văn gợi ý viết lại chuẩn xác và tự nhiên hơn."
-}}
-"""
-            prompt = f"Ngôn ngữ: '{lang_name}'. Bài viết của học sinh: '{sentence}'."
+        # Try to spend coins if cost > 0
+        if cost > 0:
+            try:
+                CoinService.spend_coins(
+                    user=request.user,
+                    lang=lang,
+                    amount=cost,
+                    transaction_type='SPEND_WRITING_PRACTICE',
+                    note=f"Luyện viết tự do AI: {sentence[:30]}..."
+                )
+            except InsufficientCoinsError:
+                lang_name = "Linh Thạch" if lang == "zh" else "Coin"
+                return Response(
+                    {"error": f"Không đủ {lang_name} để chấm điểm bài viết này (Cần {cost} {lang_name}). Hãy tích lũy thêm điểm!"},
+                    status=status.HTTP_402_PAYMENT_REQUIRED
+                )
 
-            response = client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=prompt,
-                config={
-                    'system_instruction': system_instruction,
-                    'response_mime_type': 'application/json'
-                }
-            )
+        # Create WritingTask database log entry
+        task_obj = WritingTask.objects.create(
+            user=request.user,
+            task_type='general',
+            sentence=sentence,
+            lang=lang,
+            status='PENDING',
+            cost=cost
+        )
 
-            raw_text = response.text
-            from .tasks import clean_json_string
-            cleaned_text = clean_json_string(raw_text)
-            
-            # Load as JSON to ensure validity
-            import json
-            result_data = json.loads(cleaned_text)
+        user_id = str(request.user.id)
+        task = check_general_writing_task.apply_async(
+            args=[sentence, lang],
+            kwargs={
+                'user_id': user_id, 
+                'cost': cost,
+                'writing_task_id': str(task_obj.id)
+            }
+        )
 
+        return Response({
+            'status': 'PENDING',
+            'task_id': str(task_obj.id)
+        }, status=status.HTTP_202_ACCEPTED)
+
+
+class PendingWritingTasksView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        lang = request.query_params.get('lang', '').strip()
+        task_type = request.query_params.get('task_type', '').strip()
+
+        pending_tasks = WritingTask.objects.filter(user=request.user, status='PENDING')
+        if lang:
+            pending_tasks = pending_tasks.filter(lang=lang)
+        if task_type:
+            pending_tasks = pending_tasks.filter(task_type=task_type)
+
+        task = pending_tasks.order_by('-created_at').first()
+        if task:
             return Response({
-                'status': 'SUCCESS',
-                'result': result_data
+                'has_pending': True,
+                'task_id': str(task.id),
+                'sentence': task.sentence,
+                'target_word': task.target_word,
+                'lang': task.lang,
+                'task_type': task.task_type
             }, status=status.HTTP_200_OK)
+        return Response({'has_pending': False}, status=status.HTTP_200_OK)
 
-        except Exception as e:
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.error(f"Error in CheckGeneralWritingView: {e}")
-            return Response(
-                {"error": "Failed to evaluate writing exercise."},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+
+class WritingTaskDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, task_id):
+        task = get_object_or_404(WritingTask, id=task_id, user=request.user)
+        return Response({
+            'task_id': str(task.id),
+            'status': task.status,
+            'sentence': task.sentence,
+            'target_word': task.target_word,
+            'lang': task.lang,
+            'task_type': task.task_type,
+            'result': task.result_data,
+            'error': task.error_message
+        }, status=status.HTTP_200_OK)

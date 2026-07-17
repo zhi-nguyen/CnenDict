@@ -1,5 +1,6 @@
 import uuid
 from django.db import models
+from django.conf import settings
 
 
 class FlashcardExercise(models.Model):
@@ -69,3 +70,41 @@ class UserFlashcardHistory(models.Model):
 
     def __str__(self):
         return f"{self.user.email} - {self.word} ({self.lang}) - {self.exercise_type}"
+
+
+class WritingTask(models.Model):
+    STATUS_CHOICES = [
+        ('PENDING', 'Pending'),
+        ('SUCCESS', 'Success'),
+        ('FAILED', 'Failed'),
+    ]
+    TASK_TYPES = [
+        ('general', 'Luyện viết tự do'),
+        ('deep_practice', 'Luyện viết sâu theo từ'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='writing_tasks'
+    )
+    task_type = models.CharField(max_length=20, choices=TASK_TYPES, default='general')
+    sentence = models.TextField(verbose_name="Đoạn văn/Câu do học sinh viết")
+    target_word = models.CharField(max_length=255, blank=True, default="", verbose_name="Từ vựng mục tiêu (nếu có)")
+    lang = models.CharField(max_length=10, default='zh')
+    status = models.CharField(max_length=15, choices=STATUS_CHOICES, default='PENDING')
+    cost = models.IntegerField(default=0, verbose_name="Số điểm đã khấu trừ")
+    result_data = models.JSONField(null=True, blank=True, verbose_name="Kết quả chấm điểm AI")
+    error_message = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'status']),
+            models.Index(fields=['user', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f"WritingTask({self.user.username} - {self.task_type} - {self.status} - {self.id})"

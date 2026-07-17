@@ -135,13 +135,19 @@ class SePayPaymentService:
             logger.warning(f"Could not extract order code from content: '{content}'")
             return {'success': True, 'message': 'No matching order code found'}
 
-        # Tìm và xử lý PaymentOrder trong transaction để dùng select_for_update()
+        # Tìm và xử lý PaymentOrder/CoinPurchaseOrder trong transaction để dùng select_for_update()
         with transaction.atomic():
             try:
                 order = PaymentOrder.objects.select_for_update().get(order_code=order_code)
+                is_coin_purchase = False
             except PaymentOrder.DoesNotExist:
-                logger.warning(f"PaymentOrder not found for order_code: {order_code}")
-                return {'success': True, 'message': 'Order not found'}
+                from apps.gamification.models import CoinPurchaseOrder
+                try:
+                    order = CoinPurchaseOrder.objects.select_for_update().get(order_code=order_code)
+                    is_coin_purchase = True
+                except CoinPurchaseOrder.DoesNotExist:
+                    logger.warning(f"Order not found for order_code: {order_code}")
+                    return {'success': True, 'message': 'Order not found'}
 
             # Idempotency: nếu đã PAID rồi thì bỏ qua
             if order.status == 'PAID':
@@ -156,15 +162,15 @@ class SePayPaymentService:
                 return {'success': True, 'message': 'Order expired'}
 
             # Kiểm tra số tiền khớp
-            if int(amount) < int(order.amount):
+            expected_amount = int(order.amount) if not is_coin_purchase else int(order.price)
+            if int(amount) < expected_amount:
                 logger.warning(
                     f"Amount mismatch for order {order_code}: "
-                    f"expected={order.amount}, received={amount}"
+                    f"expected={expected_amount}, received={amount}"
                 )
                 return {'success': True, 'message': 'Amount mismatch'}
 
-            # ─── Thanh toán hợp lệ → Nâng cấp tier ───
-            # Cập nhật PaymentOrder
+            # ─── Thanh toán hợp lệ ───
             order.status = 'PAID'
             order.paid_at = timezone.now()
             order.sepay_transaction_id = transaction_id
@@ -173,25 +179,54 @@ class SePayPaymentService:
                 'status', 'paid_at', 'sepay_transaction_id', 'bank_reference'
             ])
 
-            # Nâng cấp subscription
-            self._upgrade_user_subscription(order)
+            if is_coin_purchase:
+                # Cộng coin mua vào ví của User
+                from apps.gamification.coin_service import CoinService
+                CoinService.add_purchased_coins(order.user, order.lang, order.coin_amount, reference_id=str(order.id))
 
-            # Kích hoạt thông báo Real-time
-            try:
-                from .tasks import notify_payment_success_task
-                notify_payment_success_task.delay(
-                    user_id=str(order.user.id),
-                    order_id=str(order.id),
-                    target_tier=order.target_tier
-                )
-                logger.info(f"Triggered WebSocket notification task for order {order_code}")
-            except Exception as e:
-                logger.error(f"Failed to queue notification task: {e}")
+                # Gửi thông báo
+                try:
+                    from core_project.ws_utils import ws_notify
+                    ws_notify(
+                        user_id=str(order.user.id),
+                        event_type="wallet_update",
+                        title=f"Đã nạp thành công {order.coin_amount} {'Linh Thạch' if order.lang == 'zh' else 'Coin'}.",
+                        payload={
+                            "order_id": str(order.id),
+                            "status": "PAID",
+                            "coin_amount": order.coin_amount,
+                            "lang": order.lang
+                        },
+                        persist=True
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to send coin purchase WS notification: {e}")
+            else:
+                # Nâng cấp subscription
+                self._upgrade_user_subscription(order)
 
-        logger.info(
-            f"Payment confirmed for order {order_code}: "
-            f"user={order.user.username}, tier={order.target_tier}, amount={amount}"
-        )
+                # Kích hoạt thông báo Real-time
+                try:
+                    from .tasks import notify_payment_success_task
+                    notify_payment_success_task.delay(
+                        user_id=str(order.user.id),
+                        order_id=str(order.id),
+                        target_tier=order.target_tier
+                    )
+                    logger.info(f"Triggered WebSocket notification task for order {order_code}")
+                except Exception as e:
+                    logger.error(f"Failed to queue notification task: {e}")
+
+        if is_coin_purchase:
+            logger.info(
+                f"Coin purchase confirmed for order {order_code}: "
+                f"user={order.user.username}, coins={order.coin_amount}, amount={amount}"
+            )
+        else:
+            logger.info(
+                f"Payment confirmed for order {order_code}: "
+                f"user={order.user.username}, tier={order.target_tier}, amount={amount}"
+            )
         return {'success': True, 'message': 'Payment processed successfully'}
 
 
@@ -260,6 +295,11 @@ class SePayPaymentService:
 
         # Đồng bộ instance trong memory
         user.subscription = locked_sub
+
+        # Cấp refill coin tương ứng tier mới cho cả 2 ví
+        from apps.gamification.coin_service import CoinService
+        for lang in ['zh', 'en']:
+            CoinService.apply_weekly_refill_for_wallet(user, lang, target_tier)
 
     @staticmethod
     def _generate_order_code() -> str:
@@ -388,12 +428,18 @@ class SubscriptionManager:
 
         user.subscription = locked_sub
 
+        # Cấp refill coin tương ứng tier mới
+        from apps.gamification.coin_service import CoinService
+        for lang in ['zh', 'en']:
+            CoinService.apply_weekly_refill_for_wallet(user, lang, target_tier)
+
         return {
             'status': 'upgraded',
             'old_tier': old_tier,
             'new_tier': target_tier,
             'end_date': locked_sub.end_date
         }
+
 
 
 
@@ -416,6 +462,10 @@ def grant_new_user_trial_pro(user):
         
         # Đồng bộ instance trong memory
         user.subscription = sub
+        
+        # Cấp initial coins của gói Pro dùng thử cho tài khoản mới
+        from apps.gamification.coin_service import CoinService
+        CoinService.apply_initial_coins(user, 'Pro')
         
         transaction.on_commit(
             lambda: send_welcome_pro_gift_notification.apply_async(args=[str(user.id)], countdown=10)

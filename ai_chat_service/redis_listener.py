@@ -51,6 +51,55 @@ async def _publish_json(client, user_id: str, msg_type: str, payload: dict):
     await client.publish("ws:notifications", json.dumps(message, ensure_ascii=False))
 
 
+async def _dispatch_celery_task(client, task_name: str, task_args: list, task_kwargs: dict = None, queue_name: str = "queue_chat"):
+    """Helper to dispatch a Celery task to Redis queue."""
+    import base64
+    if task_kwargs is None:
+        task_kwargs = {}
+    
+    body_data = [task_args, task_kwargs, {"callbacks": None, "errbacks": None, "chain": None, "chord": None}]
+    body_str = json.dumps(body_data)
+    body_b64 = base64.b64encode(body_str.encode('utf-8')).decode('utf-8')
+    
+    celery_id = str(uuid.uuid4())
+    celery_payload = {
+        "headers": {
+            "lang": "py",
+            "task": task_name,
+            "id": celery_id,
+            "root_id": celery_id,
+            "parent_id": None,
+            "group": None,
+            "meth": None,
+            "shadow": None,
+            "eta": None,
+            "expires": None,
+            "retries": 0,
+            "timelimit": [None, None],
+            "argsrepr": repr(task_args),
+            "kwargsrepr": repr(task_kwargs),
+            "origin": "ai_chat_service"
+        },
+        "properties": {
+            "correlation_id": celery_id,
+            "reply_to": "",
+            "delivery_mode": 2,
+            "delivery_info": {
+                "exchange": "",
+                "routing_key": queue_name
+            },
+            "priority": 0,
+            "body_encoding": "base64",
+            "delivery_tag": celery_id
+        },
+        "content-encoding": "utf-8",
+        "content-type": "application/json",
+        "body": body_b64
+    }
+    await client.rpush(queue_name, json.dumps(celery_payload))
+    logger.info(f"Dispatched Celery task {task_name} to queue {queue_name}")
+
+
 async def process_chat_request(redis_client: RedisClient, agent: ChineseTutorAgent, payload: Dict[str, Any]):
     """
     Process a single chat request:
@@ -381,19 +430,121 @@ async def process_chat_request(redis_client: RedisClient, agent: ChineseTutorAge
         })
         logger.info(f"Published final chat complete response for user {user_id} (persona {persona_id})")
 
+        # ── Dispatch Celery task for chat EXP calculation ──
+        message_id = str(uuid.uuid4())
+        is_reward_str = result.get("is_reward", "neutral")
+        
+        exp_payload = {
+            "message_id": message_id,
+            "user_id": user_id,
+            "lang": learning_language,
+            "relation_type": relation_type,
+            "is_reward": is_reward_str,
+            "joy": active_joy,
+            "sad": active_sad,
+            "persona_id": persona_id,
+        }
+        
+        try:
+            await _dispatch_celery_task(
+                client, 
+                "apps.gamification.tasks.process_chat_exp", 
+                [exp_payload],
+                queue_name="queue_chat"
+            )
+            logger.info(f"Dispatched process_chat_exp Celery task for message_id={message_id}")
+        except Exception as dispatch_err:
+            logger.error(f"Failed to dispatch process_chat_exp task: {dispatch_err}", exc_info=True)
+
     except Exception as e:
         logger.error(f"Error streaming AI response: {e}", exc_info=True)
+        
+        # Check if it is a 429 / resource exhausted error
+        is_rate_limit = "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)
+        
+        # Remove user message from Redis history (so it's not saved/shown)
+        redis_key = f"chat:history:{user_id}:{persona_id}" if persona_id else f"chat:history:{user_id}"
+        try:
+            await client.rpop(redis_key)
+            logger.info(f"Popped failed user message from Redis key: {redis_key}")
+        except Exception as pop_err:
+            logger.error(f"Failed to pop user message: {pop_err}")
+
         # Publish error fallback
         fallback = agent._get_fallback_response(user_text, 0)
+        if is_rate_limit:
+            fallback["target_text"] = "系统繁忙，请稍后再试 (Hệ thống đang bận, vui lòng thử lại sau)"
+            fallback["translation_hint"] = "Hệ thống AI đang quá tải (Lỗi 429). Điểm của bạn đã được hoàn lại!"
+            fallback["emotion"] = "concerned"
+            
         fallback["active_joy"] = joy_current
         fallback["active_sad"] = sad_current
+        
         await _publish_json(client, user_id, "ai_chat_complete", {
             "is_final": True,
             "response": fallback,
             "active_joy": joy_current,
             "active_sad": sad_current,
             "persona_id": persona_id,
+            "error_code": "429" if is_rate_limit else "500"
         })
+
+        # Trigger coin refund via Celery queue_chat
+        coin_group_id = payload.get("coin_group_id")
+        coin_lang = payload.get("coin_lang")
+        coin_cost = payload.get("coin_cost", 0)
+        
+        if coin_group_id and coin_lang and coin_cost > 0:
+            try:
+                import base64
+                task_name = "apps.xiaoyue_chat.tasks.refund_chat_coins"
+                task_args = [user_id, coin_lang, coin_cost, coin_group_id]
+                task_kwargs = {"note": f"Refund: AI Service Error ({'RateLimit 429' if is_rate_limit else 'General Error'})"}
+                
+                body_data = [task_args, task_kwargs, {"callbacks": None, "errbacks": None, "chain": None, "chord": None}]
+                body_str = json.dumps(body_data)
+                body_b64 = base64.b64encode(body_str.encode('utf-8')).decode('utf-8')
+                
+                celery_id = str(uuid.uuid4())
+                celery_payload = {
+                    "headers": {
+                        "lang": "py",
+                        "task": task_name,
+                        "id": celery_id,
+                        "root_id": celery_id,
+                        "parent_id": None,
+                        "group": None,
+                        "meth": None,
+                        "shadow": None,
+                        "eta": None,
+                        "expires": None,
+                        "retries": 0,
+                        "timelimit": [None, None],
+                        "argsrepr": repr(task_args),
+                        "kwargsrepr": repr(task_kwargs),
+                        "origin": "ai_chat_service"
+                    },
+                    "properties": {
+                        "correlation_id": celery_id,
+                        "reply_to": "",
+                        "delivery_mode": 2,
+                        "delivery_info": {
+                            "exchange": "",
+                            "routing_key": "queue_chat"
+                        },
+                        "priority": 0,
+                        "body_encoding": "base64"
+                    },
+                    "content-encoding": "utf-8",
+                    "content-type": "application/json",
+                    "body": body_b64
+                }
+                
+                # Push task to Redis list queue_chat
+                await client.rpush("queue_chat", json.dumps(celery_payload))
+                logger.info(f"Successfully triggered Celery refund task for user {user_id} (group={coin_group_id})")
+            except Exception as refund_err:
+                logger.error(f"Failed to publish Celery refund task: {refund_err}", exc_info=True)
 
 
 async def start_redis_listener():

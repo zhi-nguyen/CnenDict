@@ -44,6 +44,7 @@ class ZhWord(models.Model):
             GinIndex(fields=['translation_vi'], name='zhword_trans_vi_gin', opclasses=['gin_trgm_ops']),
             GinIndex(fields=['han_viet'], name='zhword_hanviet_gin', opclasses=['gin_trgm_ops']),
             GinIndex(fields=['toneless_pinyin'], name='zhword_tpinyin_gin', opclasses=['gin_trgm_ops']),
+            GinIndex(fields=['radical'], name='zhword_radical_gin', opclasses=['jsonb_path_ops']),
         ]
 
     def __str__(self):

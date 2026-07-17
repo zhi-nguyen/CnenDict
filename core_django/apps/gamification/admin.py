@@ -22,3 +22,95 @@ class DailyActivityAdmin(admin.ModelAdmin):
     list_display = ('user', 'activity_date', 'is_target_met')
     list_filter = ('activity_date', 'is_target_met')
     search_fields = ('user__username', 'user__email')
+
+
+from .models import (
+    CoinWallet, CoinTransaction, CoinConfig, StudySession, StudySessionCard, CoinPurchaseOrder,
+    UserLanguageLevel, EXPTransaction, RewardItem, RewardRule, UserInventory, LevelRewardLog
+)
+
+@admin.register(CoinConfig)
+class CoinConfigAdmin(admin.ModelAdmin):
+    list_display = ('tier', 'weekly_refill_cap', 'initial_coins_zh', 'initial_coins_en',
+                    'words_per_coin', 'daily_free_earn_limit', 'chat_create_cost', 'chat_message_cost',
+                    'writing_base_cost_zh', 'writing_increment_cost_zh',
+                    'writing_base_cost_en', 'writing_increment_cost_en',
+                    'pdf_normal_export_cost', 'pdf_stroke_export_cost')
+
+@admin.register(CoinWallet)
+class CoinWalletAdmin(admin.ModelAdmin):
+    list_display = ('user', 'lang', 'paid_balance', 'free_balance', 'shop_balance', 'total_balance', 'updated_at')
+    list_filter = ('lang',)
+    search_fields = ('user__username', 'user__email')
+    readonly_fields = ('id',)
+
+@admin.register(CoinTransaction)
+class CoinTransactionAdmin(admin.ModelAdmin):
+    list_display = ('user', 'wallet', 'transaction_type', 'balance_type', 'amount',
+                    'paid_balance_after', 'free_balance_after', 'created_at')
+    list_filter = ('transaction_type', 'balance_type')
+    search_fields = ('user__username', 'reference_id')
+    readonly_fields = ('id', 'wallet', 'user', 'transaction_type', 'balance_type',
+                       'amount', 'paid_balance_after', 'free_balance_after', 'reference_id')
+
+@admin.register(CoinPurchaseOrder)
+class CoinPurchaseOrderAdmin(admin.ModelAdmin):
+    list_display = ('order_code', 'user', 'lang', 'coin_amount', 'price', 'status', 'created_at')
+    list_filter = ('status', 'lang')
+    readonly_fields = ('id', 'order_code', 'sepay_transaction_id', 'bank_reference')
+
+class StudySessionCardInline(admin.TabularInline):
+    model = StudySessionCard
+    extra = 0
+    readonly_fields = ('card_id', 'word', 'status')
+
+@admin.register(StudySession)
+class StudySessionAdmin(admin.ModelAdmin):
+    list_display = ('user', 'lang', 'status', 'total_cards', 'memorized_count', 'coins_earned', 'created_at')
+    list_filter = ('status', 'lang')
+    inlines = [StudySessionCardInline]
+
+@admin.register(StudySessionCard)
+class StudySessionCardAdmin(admin.ModelAdmin):
+    list_display = ('session', 'card_id', 'word', 'status', 'updated_at')
+    list_filter = ('status',)
+
+
+@admin.register(UserLanguageLevel)
+class UserLanguageLevelAdmin(admin.ModelAdmin):
+    list_display = ('user', 'lang', 'level', 'current_exp', 'total_exp', 'updated_at')
+    list_filter = ('lang', 'level')
+    search_fields = ('user__username', 'user__email')
+
+@admin.register(EXPTransaction)
+class EXPTransactionAdmin(admin.ModelAdmin):
+    list_display = ('user', 'lang', 'source_type', 'amount', 'level_before', 'level_after', 'created_at')
+    list_filter = ('lang', 'source_type')
+    search_fields = ('user__username', 'idempotency_key')
+    readonly_fields = ('id', 'user', 'lang', 'source_type', 'amount', 'level_before', 'level_after', 'exp_before', 'exp_after', 'idempotency_key', 'reference_id', 'created_at')
+
+@admin.register(RewardItem)
+class RewardItemAdmin(admin.ModelAdmin):
+    list_display = ('name', 'reward_type', 'rarity', 'is_sellable', 'price_free', 'price_paid', 'price_shop', 'is_active', 'created_at')
+    list_filter = ('reward_type', 'rarity', 'is_sellable', 'is_active')
+    search_fields = ('name', 'title_text')
+
+@admin.register(RewardRule)
+class RewardRuleAdmin(admin.ModelAdmin):
+    list_display = ('lang', 'required_level', 'reward_item', 'quantity', 'is_active')
+    list_filter = ('lang', 'required_level', 'is_active')
+    search_fields = ('reward_item__name',)
+
+@admin.register(UserInventory)
+class UserInventoryAdmin(admin.ModelAdmin):
+    list_display = ('user', 'reward_item', 'quantity', 'is_equipped', 'acquired_at')
+    list_filter = ('is_equipped', 'reward_item__reward_type')
+    search_fields = ('user__username', 'reward_item__name')
+
+@admin.register(LevelRewardLog)
+class LevelRewardLogAdmin(admin.ModelAdmin):
+    list_display = ('user', 'lang', 'level', 'reward_rule', 'granted_at')
+    list_filter = ('lang', 'level')
+    search_fields = ('user__username', 'reward_rule__reward_item__name')
+
+

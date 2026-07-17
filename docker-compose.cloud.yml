@@ -26,6 +26,7 @@ services:
       - /opt/xiaoyue/secure:/etc/nginx/certs:ro
       - django_static:/app/staticfiles:ro
       - django_media:/app/media:ro
+      - /opt/xiaoyue/logs/nginx:/var/log/nginx
     depends_on:
       core-django:
         condition: service_started
@@ -61,6 +62,8 @@ services:
       - JWT_SECRET_KEY=${JWT_SECRET_KEY}
     env_file:
       - .env
+    volumes:
+      - /opt/xiaoyue/logs/ws_gateway:/app/logs
     restart: unless-stopped
     networks:
       - xiaoyue-network
@@ -93,7 +96,7 @@ services:
   core-django:
     build:
       context: ./core_django
-    command: ["gunicorn", "core_project.wsgi:application", "--bind", "0.0.0.0:8080", "--workers", "3", "--worker-class", "gthread", "--threads", "4", "--timeout", "120", "--access-logfile", "-", "--error-logfile", "-"]
+    command: [ "gunicorn", "core_project.wsgi:application", "--bind", "0.0.0.0:8080", "--workers", "3", "--worker-class", "gthread", "--threads", "4", "--timeout", "120", "--access-logfile", "/app/logs/gunicorn_access.log", "--error-logfile", "/app/logs/gunicorn_error.log" ]
     depends_on:
       redis:
         condition: service_healthy
@@ -113,6 +116,7 @@ services:
       - /opt/xiaoyue/data:/data
       - /opt/xiaoyue/secure/key.json:/app/key.json:ro
       - /opt/xiaoyue/secure/cnen-auth-key.json:/app/cnen-auth-key.json:ro
+      - /opt/xiaoyue/logs/core_django:/app/logs
     restart: unless-stopped
     networks:
       - xiaoyue-network
@@ -121,7 +125,7 @@ services:
   celery-worker-core:
     build:
       context: ./core_django
-    command: celery -A core_project worker -Q queue_core --loglevel=info --concurrency=2
+    command: celery -A core_project worker -Q queue_core --loglevel=info --concurrency=2 --logfile=/app/logs/celery_worker_core.log
     depends_on:
       redis:
         condition: service_healthy
@@ -138,6 +142,7 @@ services:
       - /opt/xiaoyue/data:/data
       - /opt/xiaoyue/secure/key.json:/app/key.json:ro
       - /opt/xiaoyue/secure/cnen-auth-key.json:/app/cnen-auth-key.json:ro
+      - /opt/xiaoyue/logs/celery:/app/logs
     restart: unless-stopped
     networks:
       - xiaoyue-network
@@ -146,7 +151,7 @@ services:
   celery-beat:
     build:
       context: ./core_django
-    command: celery -A core_project beat --loglevel=info
+    command: celery -A core_project beat --loglevel=info --logfile=/app/logs/celery_beat.log
     depends_on:
       redis:
         condition: service_healthy
@@ -161,6 +166,7 @@ services:
     volumes:
       - /opt/xiaoyue/secure/key.json:/app/key.json:ro
       - /opt/xiaoyue/secure/cnen-auth-key.json:/app/cnen-auth-key.json:ro
+      - /opt/xiaoyue/logs/celery:/app/logs
     restart: unless-stopped
     networks:
       - xiaoyue-network
@@ -169,7 +175,7 @@ services:
   celery-worker-priority:
     build:
       context: ./core_django
-    command: celery -A core_project worker -Q queue_paid --loglevel=info --concurrency=1
+    command: celery -A core_project worker -Q queue_paid --loglevel=info --concurrency=1 --logfile=/app/logs/celery_worker_priority.log
     depends_on:
       redis:
         condition: service_healthy
@@ -188,6 +194,7 @@ services:
       - /opt/xiaoyue/data:/data
       - /opt/xiaoyue/secure/key.json:/app/key.json:ro
       - /opt/xiaoyue/secure/cnen-auth-key.json:/app/cnen-auth-key.json:ro
+      - /opt/xiaoyue/logs/celery:/app/logs
     restart: unless-stopped
     networks:
       - xiaoyue-network
@@ -196,7 +203,7 @@ services:
   celery-worker-standard:
     build:
       context: ./core_django
-    command: celery -A core_project worker -Q queue_paid,queue_free --loglevel=info --concurrency=1
+    command: celery -A core_project worker -Q queue_paid,queue_free --loglevel=info --concurrency=1 --logfile=/app/logs/celery_worker_standard.log
     depends_on:
       redis:
         condition: service_healthy
@@ -215,6 +222,7 @@ services:
       - /opt/xiaoyue/data:/data
       - /opt/xiaoyue/secure/key.json:/app/key.json:ro
       - /opt/xiaoyue/secure/cnen-auth-key.json:/app/cnen-auth-key.json:ro
+      - /opt/xiaoyue/logs/celery:/app/logs
     restart: unless-stopped
     networks:
       - xiaoyue-network
@@ -223,7 +231,7 @@ services:
   celery-worker-guest:
     build:
       context: ./core_django
-    command: celery -A core_project worker -Q queue_guest,queue_free --loglevel=info --concurrency=1
+    command: celery -A core_project worker -Q queue_guest,queue_free --loglevel=info --concurrency=1 --logfile=/app/logs/celery_worker_guest.log
     depends_on:
       redis:
         condition: service_healthy
@@ -242,6 +250,7 @@ services:
       - /opt/xiaoyue/data:/data
       - /opt/xiaoyue/secure/key.json:/app/key.json:ro
       - /opt/xiaoyue/secure/cnen-auth-key.json:/app/cnen-auth-key.json:ro
+      - /opt/xiaoyue/logs/celery:/app/logs
     restart: unless-stopped
     networks:
       - xiaoyue-network
@@ -250,7 +259,7 @@ services:
   celery-worker-chat:
     build:
       context: ./core_django
-    command: celery -A core_project worker -Q queue_chat --loglevel=info --concurrency=2
+    command: celery -A core_project worker -Q queue_chat --loglevel=info --concurrency=2 --logfile=/app/logs/celery_worker_chat.log
     depends_on:
       redis:
         condition: service_healthy
@@ -268,6 +277,7 @@ services:
       - /opt/xiaoyue/data:/data
       - /opt/xiaoyue/secure/key.json:/app/key.json:ro
       - /opt/xiaoyue/secure/cnen-auth-key.json:/app/cnen-auth-key.json:ro
+      - /opt/xiaoyue/logs/celery:/app/logs
     restart: unless-stopped
     networks:
       - xiaoyue-network
@@ -276,6 +286,8 @@ services:
   pdf-service:
     build:
       context: ./pdf_service
+    volumes:
+      - /opt/xiaoyue/logs/pdf_service:/app/logs
     restart: unless-stopped
     networks:
       - xiaoyue-network
@@ -287,6 +299,7 @@ services:
     volumes:
       - ./tts_service/cache:/app/cache
       - /opt/xiaoyue/secure/key.json:/app/key.json:ro
+      - /opt/xiaoyue/logs/tts_service:/app/logs
     environment:
       - GOOGLE_APPLICATION_CREDENTIALS=/app/key.json
       - GS_BUCKET_NAME=${GS_BUCKET_NAME:-cnen-bucket}
@@ -303,9 +316,12 @@ services:
     volumes:
       - ./image_service/cache:/app/cache
       - /opt/xiaoyue/secure/key.json:/app/key.json:ro
+      - /opt/xiaoyue/logs/image_service:/app/logs
     environment:
       - GOOGLE_APPLICATION_CREDENTIALS=/app/key.json
       - GS_BUCKET_NAME=${GS_BUCKET_NAME:-cnen-bucket}
+    env_file:
+      - .env
     restart: unless-stopped
     networks:
       - xiaoyue-network
@@ -316,6 +332,7 @@ services:
       context: ./ai_chat_service
     volumes:
       - /opt/xiaoyue/secure/key.json:/app/key.json:ro
+      - /opt/xiaoyue/logs/ai_chat_service:/app/logs
     environment:
       - REDIS_URL=${REDIS_URL:-redis://:xiaoyue_redis_secret@redis:6379/0}
       - GOOGLE_APPLICATION_CREDENTIALS=/app/key.json
@@ -336,7 +353,7 @@ volumes:
   django_static:
   django_media:
 
-# ── Networks ──
+    # ── Networks ──
 networks:
   xiaoyue-network:
     driver: bridge

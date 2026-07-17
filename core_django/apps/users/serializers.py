@@ -30,10 +30,53 @@ from PIL import Image
 from django.core.files.base import ContentFile
 
 class UserDetailSerializer(serializers.ModelSerializer):
+    equipped_frame = serializers.SerializerMethodField()
+    equipped_title = serializers.SerializerMethodField()
+    levels = serializers.SerializerMethodField()
+
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'bio', 'avatar', 'date_joined')
+        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'bio', 'avatar', 'date_joined', 'equipped_frame', 'equipped_title', 'levels')
         read_only_fields = ('id', 'username', 'date_joined')
+
+    def get_equipped_frame(self, obj):
+        from apps.gamification.models import UserInventory
+        from apps.gamification.serializers import RewardItemSerializer
+        inv = UserInventory.objects.filter(user=obj, reward_item__reward_type='avatar_frame', is_equipped=True).select_related('reward_item').first()
+        if inv:
+            return RewardItemSerializer(inv.reward_item).data
+        return None
+
+    def get_equipped_title(self, obj):
+        from apps.gamification.models import UserInventory
+        from apps.gamification.serializers import RewardItemSerializer
+        inv = UserInventory.objects.filter(user=obj, reward_item__reward_type='title', is_equipped=True).select_related('reward_item').first()
+        if inv:
+            return RewardItemSerializer(inv.reward_item).data
+        return None
+
+    def get_levels(self, obj):
+        from apps.gamification.models import UserLanguageLevel
+        from apps.gamification.leveling_service import LevelingService
+        levels = UserLanguageLevel.objects.filter(user=obj)
+        data = {}
+        for lv in levels:
+            data[lv.lang] = {
+                'level': lv.level,
+                'current_exp': lv.current_exp,
+                'exp_required': LevelingService.exp_required_for_level(lv.level),
+                'total_exp': lv.total_exp,
+            }
+        # Ensure both zh and en exist in output (defaults if not in DB yet)
+        for lang in ['zh', 'en']:
+            if lang not in data:
+                data[lang] = {
+                    'level': 1,
+                    'current_exp': 0,
+                    'exp_required': 100,
+                    'total_exp': 0
+                }
+        return data
 
     def validate_avatar(self, avatar):
         if not avatar:

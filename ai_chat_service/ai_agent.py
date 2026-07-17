@@ -59,6 +59,16 @@ class ChineseTutorAgent:
                 enum=["none", "correction", "quiz"],
                 description="The action type."
             ),
+            "is_reward": types.Schema(
+                type=types.Type.STRING,
+                enum=["reward", "punish", "neutral"],
+                description=(
+                    "Đánh giá hiệu suất học tập của user trong tin nhắn này. "
+                    "'reward' nếu user thể hiện tích cực/tiến bộ/nỗ lực tốt, "
+                    "'punish' nếu user lười biếng/sai nhiều/thái độ kém đáng bị trừ điểm, "
+                    "'neutral' nếu không có gì đặc biệt hoặc tin nhắn casual."
+                )
+            ),
             "quiz_list": types.Schema(
                 type=types.Type.ARRAY,
                 description="List of quiz items if action is 'quiz'.",
@@ -75,13 +85,26 @@ class ChineseTutorAgent:
                 )
             )
         },
-        required=["emotion", "active_joy", "active_sad", "thought", "target_text", "translation_hint", "phonetic_guide", "action", "quiz_list"]
+        required=["emotion", "active_joy", "active_sad", "thought", "target_text", "translation_hint", "phonetic_guide", "action", "is_reward", "quiz_list"]
     )
     
     def __init__(self):
         """Initialize the Gemini client using Vertex AI."""
         logger.info(f"Initializing Gemini Client with Vertex AI for model: {settings.GEMINI_MODEL_NAME}")
-        self.client = genai.Client(vertexai=True, location="global")
+        
+        # Configure HttpOptions for Vertex AI Priority PayGo routing
+        http_options = types.HttpOptions(
+            headers={
+                "X-Vertex-AI-LLM-Request-Type": "shared",
+                "X-Vertex-AI-LLM-Shared-Request-Type": "priority"
+            }
+        )
+        
+        self.client = genai.Client(
+            vertexai=True, 
+            location="global",
+            http_options=http_options
+        )
         self.model_name = settings.GEMINI_MODEL_NAME
     
     def _format_conversation_history(

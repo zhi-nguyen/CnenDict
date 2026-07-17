@@ -47,6 +47,8 @@ INSTALLED_APPS = [
     'apps.media',
     'apps.reports',
     'apps.xiaoyue_chat',
+    'apps.community',
+    'apps.leaderboard',
     'rest_framework_simplejwt',
 ]
 
@@ -184,6 +186,14 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'apps.subscriptions.tasks.expire_pending_payment_orders',
         'schedule': crontab(minute='*/5'),  # Every 5 minutes
     },
+    'refresh-leaderboards-every-4h': {
+        'task': 'apps.leaderboard.tasks.refresh_all_leaderboards',
+        'schedule': crontab(minute=0, hour='*/4'),
+    },
+    'cleanup-old-leaderboard-snapshots': {
+        'task': 'apps.leaderboard.tasks.cleanup_old_snapshots',
+        'schedule': crontab(hour=1, minute=30),
+    },
 }
 
 # Cache Configuration using Redis
@@ -250,3 +260,4 @@ EMBEDDING_DIMENSIONS = 768  # text-embedding-004 output dimensions
 CHAT_SUMMARY_CYCLE = int(os.environ.get('CHAT_SUMMARY_CYCLE', '6'))
 CHAT_RAG_THRESHOLD = int(os.environ.get('CHAT_RAG_THRESHOLD', '10'))
 CHAT_RAG_TOP_K = int(os.environ.get('CHAT_RAG_TOP_K', '3'))
+AZURE_SPEECH_CONFIDENCE_THRESHOLD = float(os.environ.get('AZURE_SPEECH_CONFIDENCE_THRESHOLD','0.6'))

@@ -322,18 +322,12 @@ class FirebaseLoginView(APIView):
         refresh_token = str(refresh)
 
         # Build response and set cookies
+        from .serializers import UserDetailSerializer
+        user_data = UserDetailSerializer(user, context={'request': request}).data
         response = Response({
             "access": access_token,
             "refresh": refresh_token,
-            "user": {
-                "id": str(user.id),
-                "username": user.username,
-                "email": user.email,
-                "first_name": user.first_name,
-                "last_name": user.last_name,
-                "bio": user.bio,
-                "avatar": user.avatar.url if user.avatar else None,
-            }
+            "user": user_data
         }, status=200)
 
         # Retrieve cookie configs
