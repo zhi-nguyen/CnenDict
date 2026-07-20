@@ -14,6 +14,19 @@ on:
       - 'nginx/**'
       - 'docker-compose.cloud.yml'
       - '.github/workflows/deploy-backend.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'core_django/**'
+      - 'ws_gateway/**'
+      - 'pdf_service/**'
+      - 'tts_service/**'
+      - 'image_service/**'
+      - 'ai_chat_service/**'
+      - 'nginx/**'
+      - 'docker-compose.cloud.yml'
+      - '.github/workflows/deploy-backend.yml'
 
 jobs:
   lint:
@@ -43,6 +56,7 @@ jobs:
   deploy:
     name: Deploy to Azure VPS
     needs: lint
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Deploy to VPS via SSH
