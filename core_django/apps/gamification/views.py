@@ -1,3 +1,4 @@
+import logging
 from rest_framework import generics, views, status
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
@@ -5,6 +6,7 @@ from django.utils import timezone
 from .models import UserStreak, DailyTarget, StudyHistory, DailyActivity
 from .serializers import UserStreakSerializer, DailyTargetSerializer, StudyHistorySerializer, DailyActivitySerializer
 
+logger = logging.getLogger(__name__)
 class StreakView(generics.RetrieveAPIView):
     serializer_class = UserStreakSerializer
     permission_classes = [IsAuthenticated]
