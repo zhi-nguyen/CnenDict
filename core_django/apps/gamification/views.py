@@ -646,17 +646,14 @@ class RewardsPreviewView(views.APIView):
         return Response(data, status=status.HTTP_200_OK)
 
 
-from django.utils.decorators import method_decorator
-from django.views.decorators.cache import cache_page
-
-@method_decorator(cache_page(60 * 10), name='dispatch')
 class ShopItemListView(generics.ListAPIView):
     """
     GET /api/v1/gamification/shop/items/
     Trả về danh sách các vật phẩm active và is_sellable=True.
+    Cho phép Guest xem catalog (AllowAny). Mua hàng vẫn yêu cầu IsAuthenticated (PurchaseItemView).
     """
     serializer_class = RewardItemSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
 
     def get_queryset(self):
         return RewardItem.objects.filter(is_active=True, is_sellable=True).order_by('rarity', 'name')
