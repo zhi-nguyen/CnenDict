@@ -6,3 +6,4 @@ class GamificationConfig(AppConfig):
 
     def ready(self):
         import apps.gamification.signals
+        import apps.gamification.quest_service
