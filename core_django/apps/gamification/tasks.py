@@ -31,6 +31,19 @@ def calculate_daily_streaks():
             streak.current_streak += 1
             if streak.current_streak > streak.max_streak:
                 streak.max_streak = streak.current_streak
+            
+            # Emit quest action signal for streak_days
+            try:
+                from .quest_signals import quest_action_signal
+                quest_action_signal.send(
+                    sender='streak_days',
+                    user=user,
+                    trigger_type='streak_days',
+                    amount=streak.current_streak,
+                    lang='all'
+                )
+            except Exception as sig_err:
+                pass
         else:
             streak.current_streak = 0
             
@@ -244,6 +257,20 @@ def process_chat_exp(self, payload: dict) -> dict:
                 },
                 persist=False,
             )
+
+        # ── Phát Quest Action Signal cho Chat AI ──
+        if not result.get('already_processed'):
+            try:
+                from .quest_signals import quest_action_signal
+                quest_action_signal.send(
+                    sender='chat_messages',
+                    user=user,
+                    trigger_type='chat_messages',
+                    amount=1,
+                    lang=lang
+                )
+            except Exception as sig_err:
+                logger.debug(f"Could not send chat_messages quest signal: {sig_err}")
         
         return {'status': 'success', **result}
         
@@ -262,5 +289,33 @@ def process_chat_exp(self, payload: dict) -> dict:
         except Exception:
             pass
         raise self.retry(exc=e)
+
+
+@shared_task
+def cleanup_expired_quests():
+    """
+    Celery task chạy định kỳ lúc nửa đêm để dọn dẹp các quest đã hết hạn chu kỳ.
+    - Không batch tạo trước (Lazy Initialization xử lý).
+    - Vô hiệu hóa các event quest đã quá valid_to.
+    """
+    from .models import UserQuestProgress, QuestDefinition
+    import logging
+    
+    logger = logging.getLogger(__name__)
+    today = timezone.localdate()
+    now = timezone.now()
+
+    expired_events = QuestDefinition.objects.filter(
+        quest_type='event',
+        is_active=True,
+        valid_to__lt=now
+    )
+    expired_event_count = expired_events.count()
+    if expired_event_count > 0:
+        expired_events.update(is_active=False)
+
+    logger.info(f"Cleanup expired quests completed. Deactivated {expired_event_count} expired event quests.")
+    return f"Deactivated {expired_event_count} event quests."
+
 
 
