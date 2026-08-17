@@ -144,20 +144,6 @@ class CoinService:
                 except Exception as ex:
                     logger.warning(f"Failed to increment daily coin counter in Redis: {ex}")
 
-        # 4. Phát Quest Action Signal cho earn_coins
-        if coins_to_add > 0:
-            try:
-                from .quest_signals import quest_action_signal
-                quest_action_signal.send(
-                    sender='earn_coins',
-                    user=user,
-                    trigger_type='earn_coins',
-                    amount=coins_to_add,
-                    lang=lang
-                )
-            except Exception as sig_err:
-                logger.debug(f"Could not send earn_coins quest signal: {sig_err}")
-
         return txn, coins_to_add, is_capped
 
     # ────────────────── SPEND (Split-Aware Audit) ──────────────────

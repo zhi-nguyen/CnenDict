@@ -1,8 +1,7 @@
 from rest_framework import serializers
 from .models import (
     UserStreak, DailyTarget, StudyHistory, DailyActivity, StudySession, StudySessionCard, CoinWallet, CoinTransaction,
-    UserLanguageLevel, EXPTransaction, RewardItem, UserInventory, LevelRewardLog,
-    QuestDefinition, UserQuestProgress, QuestClaimLog
+    UserLanguageLevel, EXPTransaction, RewardItem, UserInventory, LevelRewardLog
 )
 
 class UserStreakSerializer(serializers.ModelSerializer):
@@ -84,48 +83,5 @@ class UserInventorySerializer(serializers.ModelSerializer):
     class Meta:
         model = UserInventory
         fields = ['id', 'reward_item', 'quantity', 'is_equipped', 'acquired_at']
-
-
-class QuestDefinitionSerializer(serializers.ModelSerializer):
-    reward_item = RewardItemSerializer(read_only=True)
-
-    class Meta:
-        model = QuestDefinition
-        fields = [
-            'id', 'name', 'description', 'icon', 'quest_type', 'lang',
-            'trigger_type', 'target_value', 'reward_exp', 'reward_coins',
-            'reward_item', 'reward_item_quantity', 'valid_from', 'valid_to',
-            'sort_order', 'is_active', 'created_at'
-        ]
-
-
-class UserQuestProgressSerializer(serializers.ModelSerializer):
-    quest = QuestDefinitionSerializer(read_only=True)
-    progress_percent = serializers.SerializerMethodField()
-
-    class Meta:
-        model = UserQuestProgress
-        fields = [
-            'id', 'quest', 'current_value', 'status',
-            'period_start', 'period_end', 'completed_at',
-            'claimed_at', 'updated_at', 'progress_percent'
-        ]
-
-    def get_progress_percent(self, obj) -> int:
-        if not obj.quest or obj.quest.target_value <= 0:
-            return 0
-        return min(100, int((obj.current_value / obj.quest.target_value) * 100))
-
-
-class QuestClaimLogSerializer(serializers.ModelSerializer):
-    item_granted = RewardItemSerializer(read_only=True)
-
-    class Meta:
-        model = QuestClaimLog
-        fields = [
-            'id', 'quest_id', 'period_start', 'exp_granted',
-            'coins_granted', 'item_granted', 'item_quantity_granted', 'claimed_at'
-        ]
-
 
 
