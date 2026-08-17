@@ -323,6 +323,35 @@ class FinishStudySessionView(views.APIView):
 
         balances = CoinService.get_all_balances(request.user)
 
+        # ── Phát Quest Action Signals ──
+        try:
+            from .quest_signals import quest_action_signal
+            if memorized_count > 0:
+                quest_action_signal.send(
+                    sender='study_words',
+                    user=request.user,
+                    trigger_type='study_words',
+                    amount=memorized_count,
+                    lang=session.lang
+                )
+            quest_action_signal.send(
+                sender='study_sessions',
+                user=request.user,
+                trigger_type='study_sessions',
+                amount=1,
+                lang=session.lang
+            )
+            if is_met:
+                quest_action_signal.send(
+                    sender='daily_target_met',
+                    user=request.user,
+                    trigger_type='daily_target_met',
+                    amount=1,
+                    lang=session.lang
+                )
+        except Exception as sig_err:
+            logger.debug(f"Could not send study session quest signals: {sig_err}")
+
         # Trả về kết quả, bao gồm thông tin EXP
         return Response({
             "status": "success",
