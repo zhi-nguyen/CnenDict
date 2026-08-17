@@ -127,19 +127,6 @@ class LevelingService:
             for lv in range(level_before + 1, level_obj.level + 1):
                 rewards = LevelingService._grant_level_rewards(user, lang, lv)
                 rewards_granted.extend(rewards)
-
-            # Phát quest action signal cho reach_level
-            try:
-                from .quest_signals import quest_action_signal
-                quest_action_signal.send(
-                    sender='reach_level',
-                    user=user,
-                    trigger_type='reach_level',
-                    amount=level_obj.level,
-                    lang=lang
-                )
-            except Exception as sig_err:
-                logger.debug(f"Could not send reach_level quest signal: {sig_err}")
         
         return {
             'level_before': level_before,
