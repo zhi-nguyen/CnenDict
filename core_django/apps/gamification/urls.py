@@ -4,7 +4,8 @@ from .views import (
     CreateStudySessionView, FinishStudySessionView, WalletBalanceView, InitiateCoinPurchaseView,
     CoinConfigView, CoinPurchaseStatusView, AllCoinConfigsView,
     LevelInfoView, UserInventoryView, EquipInventoryItemView, RewardsPreviewView,
-    ShopItemListView, PurchaseItemView
+    ShopItemListView, PurchaseItemView,
+    UserQuestListView, ClaimQuestRewardView
 )
 
 urlpatterns = [
@@ -31,6 +32,10 @@ urlpatterns = [
     # Shop endpoints
     path('shop/items/', ShopItemListView.as_view(), name='shop-items'),
     path('shop/purchase/', PurchaseItemView.as_view(), name='shop-purchase'),
+
+    # Quest endpoints
+    path('quests/', UserQuestListView.as_view(), name='user-quests'),
+    path('quests/<uuid:progress_id>/claim/', ClaimQuestRewardView.as_view(), name='claim-quest-reward'),
 ]
 
 
