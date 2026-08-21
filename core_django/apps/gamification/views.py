@@ -95,11 +95,13 @@ from .models import (
 )
 from .serializers import (
     StudySessionSerializer, StudySessionCardSerializer, CoinWalletSerializer, CoinTransactionSerializer,
-    UserLanguageLevelSerializer, EXPTransactionSerializer, RewardItemSerializer, UserInventorySerializer
+    UserLanguageLevelSerializer, EXPTransactionSerializer, RewardItemSerializer, UserInventorySerializer,
+    UserQuestProgressSerializer
 )
 from .coin_service import CoinService, InsufficientCoinsError
 from .leveling_service import LevelingService
 from .shop_service import ShopService, ItemNotFoundError, AlreadyOwnedError, InvalidPaymentMethodError
+from .quest_service import QuestService, QuestNotFoundError, QuestNotCompletedError, AlreadyClaimedError
 import uuid
 
 class ActivityHistoryView(generics.ListAPIView):
@@ -322,6 +324,35 @@ class FinishStudySessionView(views.APIView):
             exp_capped = True
 
         balances = CoinService.get_all_balances(request.user)
+
+        # ── Phát Quest Action Signals ──
+        try:
+            from .quest_signals import quest_action_signal
+            if memorized_count > 0:
+                quest_action_signal.send(
+                    sender='study_words',
+                    user=request.user,
+                    trigger_type='study_words',
+                    amount=memorized_count,
+                    lang=session.lang
+                )
+            quest_action_signal.send(
+                sender='study_sessions',
+                user=request.user,
+                trigger_type='study_sessions',
+                amount=1,
+                lang=session.lang
+            )
+            if is_met:
+                quest_action_signal.send(
+                    sender='daily_target_met',
+                    user=request.user,
+                    trigger_type='daily_target_met',
+                    amount=1,
+                    lang=session.lang
+                )
+        except Exception as sig_err:
+            logger.debug(f"Could not send study session quest signals: {sig_err}")
 
         # Trả về kết quả, bao gồm thông tin EXP
         return Response({
@@ -703,5 +734,76 @@ class PurchaseItemView(views.APIView):
         except Exception as e:
             logger.exception("Lỗi không mong đợi khi xử lý mua vật phẩm.")
             return Response({"error": "Lỗi hệ thống khi xử lý mua vật phẩm."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class UserQuestListView(views.APIView):
+    """
+    GET /api/v1/gamification/quests/?type=daily&lang=zh
+    Lấy danh sách nhiệm vụ và tiến độ hiện tại của user.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        quest_type = request.query_params.get('type')
+        lang = request.query_params.get('lang', 'all')
+
+        if quest_type and quest_type not in ['daily', 'weekly', 'achievement', 'event']:
+            return Response(
+                {"error": "Loại nhiệm vụ không hợp lệ. Chỉ chấp nhận 'daily', 'weekly', 'achievement', 'event'."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        progress_list = QuestService.get_user_quests(
+            user=request.user,
+            quest_type=quest_type,
+            lang=lang
+        )
+
+        serializer = UserQuestProgressSerializer(progress_list, many=True)
+
+        # Thống kê nhanh
+        completed_count = sum(1 for p in progress_list if p.status == 'completed')
+        claimed_count = sum(1 for p in progress_list if p.status == 'claimed')
+        in_progress_count = sum(1 for p in progress_list if p.status == 'in_progress')
+
+        return Response({
+            "quests": serializer.data,
+            "summary": {
+                "total": len(progress_list),
+                "completed": completed_count,
+                "claimed": claimed_count,
+                "in_progress": in_progress_count,
+            }
+        }, status=status.HTTP_200_OK)
+
+
+class ClaimQuestRewardView(views.APIView):
+    """
+    POST /api/v1/gamification/quests/<progress_id>/claim/
+    Nhận phần thưởng cho nhiệm vụ đã hoàn thành.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, progress_id):
+        lang = request.data.get('lang', 'zh')
+        if lang not in ['zh', 'en']:
+            lang = 'zh'
+
+        try:
+            result = QuestService.claim_reward(
+                user=request.user,
+                progress_id=progress_id,
+                target_lang=lang
+            )
+            return Response(result, status=status.HTTP_200_OK)
+
+        except QuestNotFoundError as e:
+            return Response({"error": str(e)}, status=status.HTTP_404_NOT_FOUND)
+        except (QuestNotCompletedError, AlreadyClaimedError) as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.exception("Lỗi không mong đợi khi nhận thưởng nhiệm vụ.")
+            return Response({"error": "Lỗi hệ thống khi nhận thưởng nhiệm vụ."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 

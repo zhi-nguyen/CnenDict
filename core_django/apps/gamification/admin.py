@@ -26,7 +26,8 @@ class DailyActivityAdmin(admin.ModelAdmin):
 
 from .models import (
     CoinWallet, CoinTransaction, CoinConfig, StudySession, StudySessionCard, CoinPurchaseOrder,
-    UserLanguageLevel, EXPTransaction, RewardItem, RewardRule, UserInventory, LevelRewardLog
+    UserLanguageLevel, EXPTransaction, RewardItem, RewardRule, UserInventory, LevelRewardLog,
+    QuestDefinition, UserQuestProgress, QuestClaimLog
 )
 
 @admin.register(CoinConfig)
@@ -112,5 +113,30 @@ class LevelRewardLogAdmin(admin.ModelAdmin):
     list_display = ('user', 'lang', 'level', 'reward_rule', 'granted_at')
     list_filter = ('lang', 'level')
     search_fields = ('user__username', 'reward_rule__reward_item__name')
+
+
+@admin.register(QuestDefinition)
+class QuestDefinitionAdmin(admin.ModelAdmin):
+    list_display = ('name', 'quest_type', 'lang', 'trigger_type', 'target_value', 'reward_exp', 'reward_coins', 'reward_item', 'is_active', 'sort_order', 'created_at')
+    list_filter = ('quest_type', 'lang', 'trigger_type', 'is_active')
+    search_fields = ('name', 'description')
+    ordering = ('quest_type', 'sort_order', 'created_at')
+
+
+@admin.register(UserQuestProgress)
+class UserQuestProgressAdmin(admin.ModelAdmin):
+    list_display = ('user', 'quest', 'current_value', 'status', 'period_start', 'period_end', 'completed_at', 'claimed_at', 'updated_at')
+    list_filter = ('status', 'quest__quest_type', 'period_start')
+    search_fields = ('user__username', 'user__email', 'quest__name')
+    readonly_fields = ('id', 'completed_at', 'claimed_at', 'updated_at')
+
+
+@admin.register(QuestClaimLog)
+class QuestClaimLogAdmin(admin.ModelAdmin):
+    list_display = ('user', 'quest', 'period_start', 'exp_granted', 'coins_granted', 'item_granted', 'item_quantity_granted', 'claimed_at')
+    list_filter = ('quest__quest_type', 'claimed_at')
+    search_fields = ('user__username', 'quest__name')
+    readonly_fields = ('id', 'user', 'quest', 'progress', 'period_start', 'exp_granted', 'coins_granted', 'item_granted', 'item_quantity_granted', 'claimed_at')
+
 
 

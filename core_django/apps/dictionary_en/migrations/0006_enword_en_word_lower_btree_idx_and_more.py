@@ -5,6 +5,16 @@ import django.db.models.functions.text
 from django.db import migrations, models
 
 
+def create_pattern_idx(apps, schema_editor):
+    if schema_editor.connection.vendor == 'postgresql':
+        schema_editor.execute('CREATE INDEX IF NOT EXISTS en_word_lower_pattern_idx ON dictionary_en_enword ((lower(word)) varchar_pattern_ops);')
+
+
+def drop_pattern_idx(apps, schema_editor):
+    if schema_editor.connection.vendor == 'postgresql':
+        schema_editor.execute('DROP INDEX IF EXISTS en_word_lower_pattern_idx;')
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -20,8 +30,9 @@ class Migration(migrations.Migration):
             model_name='enword',
             index=django.contrib.postgres.indexes.GinIndex(fields=['translation_vi'], name='enword_trans_vi_gin', opclasses=['gin_trgm_ops']),
         ),
-        migrations.RunSQL(
-            sql='CREATE INDEX en_word_lower_pattern_idx ON dictionary_en_enword ((lower(word)) varchar_pattern_ops);',
-            reverse_sql='DROP INDEX en_word_lower_pattern_idx;',
+        migrations.RunPython(
+            create_pattern_idx,
+            reverse_code=drop_pattern_idx,
         ),
     ]
+
